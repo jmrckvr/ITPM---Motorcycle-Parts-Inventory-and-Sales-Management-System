@@ -1,6 +1,6 @@
 <script setup>
-import { computed, ref } from "vue";
-import { RouterLink, useRoute } from "vue-router";
+import { computed, onMounted, ref } from "vue";
+import { RouterLink, useRoute, useRouter } from "vue-router";
 import {
   AlertTriangle,
   BarChart3,
@@ -16,9 +16,38 @@ import {
   Users,
   Warehouse,
 } from "@lucide/vue";
+import api from "./services/api";
 
 const route = useRoute();
+const router = useRouter();
 const mobileMenuOpen = ref(false);
+const authForm = ref({
+  email: "admin@motoparts.test",
+  password: "password123",
+});
+const authError = ref("");
+const authLoading = ref(false);
+
+const currentUser = computed(() => {
+  try {
+    return JSON.parse(sessionStorage.getItem("auth_user") || "null") || {};
+  } catch {
+    return {};
+  }
+});
+
+const isAuthenticated = computed(() => Boolean(sessionStorage.getItem("auth_token")));
+
+const userInitials = computed(() => {
+  const name = currentUser.value?.name || "Alex Dela Cruz";
+
+  return name
+    .split(" ")
+    .slice(0, 2)
+    .map((part) => part[0])
+    .join("")
+    .toUpperCase();
+});
 
 const navigation = [
   { label: "Dashboard", to: "/dashboard", icon: LayoutDashboard },
@@ -95,10 +124,75 @@ const recentSales = [
   { id: "#TX-1047", time: "10:18 AM", cashier: "Joel Ramos", amount: "₱1,280" },
   { id: "#TX-1046", time: "09:56 AM", cashier: "Maria Santos", amount: "₱860" },
 ];
+
+const syncAuthRoute = () => {
+  const hasToken = Boolean(sessionStorage.getItem("auth_token"));
+
+  if (!hasToken && route.path !== "/login") {
+    router.replace("/login");
+  }
+
+  if (hasToken && route.path === "/login") {
+    router.replace("/");
+  }
+};
+
+onMounted(() => {
+  syncAuthRoute();
+});
+
+router.beforeEach((to, _from, next) => {
+  const hasToken = Boolean(sessionStorage.getItem("auth_token"));
+
+  if (!hasToken && to.path !== "/login") {
+    next("/login");
+    return;
+  }
+
+  if (hasToken && to.path === "/login") {
+    next("/");
+    return;
+  }
+
+  next();
+});
+
+async function submitLogin() {
+  authLoading.value = true;
+  authError.value = "";
+
+  try {
+    const { data } = await api.post("/auth/login", authForm.value);
+    sessionStorage.setItem("auth_token", data.token);
+    sessionStorage.setItem("auth_user", JSON.stringify(data.user));
+    await router.push("/");
+  } catch (error) {
+    authError.value =
+      error.response?.data?.message ||
+      error.response?.data?.errors?.email?.[0] ||
+      "Unable to sign in. Please check your email and password.";
+  } finally {
+    authLoading.value = false;
+  }
+}
+
+async function logout() {
+  try {
+    if (sessionStorage.getItem("auth_token")) {
+      await api.post("/auth/logout");
+    }
+  } catch (error) {
+    console.warn("Logout request failed", error);
+  } finally {
+    sessionStorage.removeItem("auth_token");
+    sessionStorage.removeItem("auth_user");
+    await router.push("/login");
+  }
+}
 </script>
 
 <template>
-  <div v-if="activeSection === 'login'" class="auth-screen">
+  <div v-if="!isAuthenticated || route.path === '/login'" class="auth-screen">
     <div class="auth-panel">
       <div class="brand-lockup auth-brand">
         <div class="brand-mark">MP</div>
@@ -112,19 +206,34 @@ const recentSales = [
       <p class="heading-copy">
         Sign in to manage parts, stock movements, and cashier transactions.
       </p>
-      <form class="login-form" @submit.prevent>
-        <label
-          >Email address<input type="email" placeholder="you@motoparts.local"
-        /></label>
-        <label
-          >Password<input type="password" placeholder="Enter your password"
-        /></label>
-        <button class="primary-button" type="submit">
-          Continue to workspace
+      <form class="login-form" @submit.prevent="submitLogin">
+        <label>
+          Email address
+          <input
+            v-model="authForm.email"
+            type="email"
+            placeholder="you@motoparts.local"
+            autocomplete="email"
+            required
+          />
+        </label>
+        <label>
+          Password
+          <input
+            v-model="authForm.password"
+            type="password"
+            placeholder="Enter your password"
+            autocomplete="current-password"
+            required
+          />
+        </label>
+        <p v-if="authError" class="auth-error">{{ authError }}</p>
+        <button class="primary-button" type="submit" :disabled="authLoading">
+          {{ authLoading ? "Signing in..." : "Continue to workspace" }}
         </button>
       </form>
       <p class="auth-note">
-        Authentication will connect to Laravel Sanctum in Phase 3.
+        Demo credentials: admin@motoparts.test / password123
       </p>
     </div>
   </div>
@@ -161,10 +270,11 @@ const recentSales = [
             <strong>System online</strong><small>Local workspace</small>
           </div>
         </div>
-        <button class="profile-row" type="button">
-          <span class="avatar">AD</span>
+        <button class="profile-row" type="button" @click="logout">
+          <span class="avatar">{{ userInitials }}</span>
           <span class="profile-copy"
-            ><strong>Alex Dela Cruz</strong><small>Administrator</small></span
+            ><strong>{{ currentUser?.name || "Alex Dela Cruz" }}</strong
+            ><small>{{ currentUser?.role || "Administrator" }}</small></span
           >
           <ChevronDown :size="16" />
         </button>
@@ -196,9 +306,10 @@ const recentSales = [
           >
             <Bell :size="19" /><span></span>
           </button>
-          <div class="topbar-user">
-            <span class="avatar avatar-small">AD</span
-            ><span>Alex Dela Cruz</span><ChevronDown :size="15" />
+          <div class="topbar-user" @click="logout">
+            <span class="avatar avatar-small">{{ userInitials }}</span
+            ><span>{{ currentUser?.name || "Alex Dela Cruz" }}</span
+            ><ChevronDown :size="15" />
           </div>
         </div>
       </header>
