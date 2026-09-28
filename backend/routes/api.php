@@ -24,7 +24,7 @@ Route::middleware('auth:sanctum')->group(function () {
         return $request->user();
     });
 
-    Route::get('/dashboard/summary', fn () => ['status' => 'ok']);
+    Route::get('/dashboard/summary', fn() => ['status' => 'ok']);
 
     Route::apiResource('products', ProductController::class);
     Route::apiResource('categories', CategoryController::class);
@@ -39,6 +39,6 @@ Route::middleware('auth:sanctum')->group(function () {
 });
 
 Route::middleware(['auth:sanctum', 'role:admin'])->group(function () {
-    Route::get('/admin/health', fn () => ['status' => 'admin']);
+    Route::get('/admin/health', fn() => ['status' => 'admin']);
     Route::apiResource('users', UserController::class);
 });

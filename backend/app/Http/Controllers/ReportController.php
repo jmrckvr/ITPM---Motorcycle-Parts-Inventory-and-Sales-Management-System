@@ -11,8 +11,8 @@ class ReportController extends Controller
     public function sales(Request $request)
     {
         $sales = Sale::with('cashier')
-            ->when($request->query('from'), fn ($query, $from) => $query->whereDate('sold_at', '>=', $from))
-            ->when($request->query('to'), fn ($query, $to) => $query->whereDate('sold_at', '<=', $to))
+            ->when($request->query('from'), fn($query, $from) => $query->whereDate('sold_at', '>=', $from))
+            ->when($request->query('to'), fn($query, $to) => $query->whereDate('sold_at', '<=', $to))
             ->orderBy('sold_at', 'desc')
             ->get();
 

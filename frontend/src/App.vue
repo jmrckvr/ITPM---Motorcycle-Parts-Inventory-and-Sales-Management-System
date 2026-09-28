@@ -36,7 +36,9 @@ const currentUser = computed(() => {
   }
 });
 
-const isAuthenticated = computed(() => Boolean(sessionStorage.getItem("auth_token")));
+const isAuthenticated = computed(() =>
+  Boolean(sessionStorage.getItem("auth_token")),
+);
 
 const userInitials = computed(() => {
   const name = currentUser.value?.name || "Alex Dela Cruz";
