@@ -53,124 +53,31 @@ const dashboard = ref({
 const cashReceived = ref(0);
 const operationError = ref("");
 const operationMessage = ref("");
-const stockForm = ref({ product_id: "", quantity: 1, reason: "", reference: "" });
+const loading = ref(false);
+const categories = ref([]);
+const suppliers = ref([]);
+const stockForm = ref({ product_id: "", quantity: 1, reason: "", reference: "", supplier_id: "" });
+const paymentMethod = ref("cash");
+const lastReceipt = ref(null);
+const salesSearch = ref("");
+const salesFrom = ref("");
+const salesTo = ref("");
+const selectedSale = ref(null);
+const notificationTab = ref("alerts");
 const staffSearch = ref("");
 const showStaffModal = ref(false);
 const newStaff = ref({ name: "", email: "", password: "", role: "staff" });
 const notifications = ref([]);
 const stockMovements = ref([]);
+const viewedProfile = ref(null);
+const showProfileEdit = ref(false);
+const profileForm = ref({ name: "", email: "", password: "" });
 const activeRole = computed(() => currentUser.value?.role || "admin");
 const isAuthenticated = computed(() => Boolean(authToken.value));
 
-const products = ref([
-  {
-    id: 1,
-    sku: "SPK-001",
-    name: "Spark Plug",
-    brand: "Honda",
-    category: "Engine Parts",
-    price: 150,
-    quantity: 25,
-    reorder_level: 10,
-  },
-  {
-    id: 2,
-    sku: "BRK-014",
-    name: "Brake Pad",
-    brand: "Honda",
-    category: "Brake Parts",
-    price: 420,
-    quantity: 8,
-    reorder_level: 10,
-  },
-  {
-    id: 3,
-    sku: "OIL-008",
-    name: "Oil Filter",
-    brand: "Yamaha",
-    category: "Engine Parts",
-    price: 280,
-    quantity: 0,
-    reorder_level: 8,
-  },
-  {
-    id: 4,
-    sku: "CVR-022",
-    name: "Motorcycle Cover",
-    brand: "Yamaha",
-    category: "Accessories",
-    price: 1500,
-    quantity: 15,
-    reorder_level: 5,
-  },
-]);
-const transactions = ref([
-  {
-    id: "TRX-0023",
-    date: "September 27, 2026",
-    items: 3,
-    total: 1500,
-    payment: "Cash",
-  },
-  {
-    id: "TRX-0022",
-    date: "September 27, 2026",
-    items: 1,
-    total: 550,
-    payment: "GCash",
-  },
-  {
-    id: "TRX-0021",
-    date: "September 27, 2026",
-    items: 3,
-    total: 1890,
-    payment: "Cash",
-  },
-  {
-    id: "TRX-0020",
-    date: "September 27, 2026",
-    items: 2,
-    total: 670,
-    payment: "Cash",
-  },
-  {
-    id: "TRX-0019",
-    date: "September 26, 2026",
-    items: 4,
-    total: 2550,
-    payment: "GCash",
-  },
-]);
-const staff = ref([
-  {
-    id: 1,
-    name: "Juan Dela Cruz",
-    username: "juan123",
-    role: "Manager",
-    status: "Active",
-  },
-  {
-    id: 2,
-    name: "Jang Wonyoung",
-    username: "luckyvicky",
-    role: "Staff",
-    status: "Active",
-  },
-  {
-    id: 3,
-    name: "Luisa Marie Yano",
-    username: "skrrtskrrt",
-    role: "Staff",
-    status: "Inactive",
-  },
-  {
-    id: 4,
-    name: "Joe Honey Bee",
-    username: "thankyouso-",
-    role: "Staff",
-    status: "Inactive",
-  },
-]);
+const products = ref([]);
+const transactions = ref([]);
+const staff = ref([]);
 const cart = ref([]);
 const showProductModal = ref(false);
 const editingProductId = ref(null);
@@ -183,6 +90,11 @@ const newProduct = ref({
   quantity: 0,
 });
 
+const filteredTransactions = computed(() => transactions.value.filter((sale) => {
+  const text = `${sale.id} ${sale.payment}`.toLowerCase();
+  return text.includes(salesSearch.value.toLowerCase()) && (!salesFrom.value || sale.rawDate >= salesFrom.value) && (!salesTo.value || sale.rawDate <= salesTo.value);
+}));
+const visibleNotifications = computed(() => notifications.value.filter((item) => notificationTab.value === "alerts" ? item.type !== "announcement" : item.type === "announcement"));
 const navItems = computed(() =>
   activeRole.value === "staff"
     ? [
@@ -215,6 +127,8 @@ const navItems = computed(() =>
 const routeName = computed(() =>
   route.path === "/"
     ? "Dashboard"
+    : route.path === "/profile" || route.path.includes("/profile")
+      ? "Profile"
     : navItems.value.find(
         (item) => route.path.startsWith(item.path) && item.path !== "/",
       )?.label || "Dashboard",
@@ -246,15 +160,20 @@ const cartTotal = computed(() =>
 
 onMounted(async () => {
   if (!isAuthenticated.value) return;
+  if (route.path === "/profile") viewedProfile.value = currentUser.value;
   await refreshData();
 });
 async function refreshData() {
+  loading.value = true;
+  operationError.value = "";
   try {
-    const [productResponse, salesResponse, dashboardResponse, movementResponse] = await Promise.all([
+    const [productResponse, salesResponse, dashboardResponse, movementResponse, categoryResponse, supplierResponse] = await Promise.all([
       api.get("/products"),
       api.get("/sales"),
       api.get("/dashboard/summary"),
       api.get("/stock-movements"),
+      api.get("/categories"),
+      api.get("/suppliers"),
     ]);
     products.value = (productResponse.data.data || []).map((item) => ({
       ...item,
@@ -263,6 +182,7 @@ async function refreshData() {
     }));
     transactions.value = (salesResponse.data.data || []).map((sale) => ({
       ...sale,
+      saleId: sale.id,
       id: sale.transaction_number,
       date: new Date(`${sale.sold_at}Z`).toLocaleDateString("en-PH", {
         year: "numeric",
@@ -272,27 +192,36 @@ async function refreshData() {
       items: sale.items?.reduce((sum, item) => sum + item.quantity, 0) || 0,
       total: sale.total_amount,
       payment: sale.payment_method,
+      rawDate: sale.sold_at?.slice(0, 10) || "",
     }));
     dashboard.value = dashboardResponse.data.data;
     stockMovements.value = movementResponse.data.data || [];
+    categories.value = categoryResponse.data.data || [];
+    suppliers.value = supplierResponse.data.data || [];
     if (activeRole.value === "admin") {
-      const [usersResponse, notificationsResponse] = await Promise.all([
-        api.get("/users"),
-        api.get("/notifications"),
-      ]);
+      const usersResponse = await api.get("/users");
       staff.value = usersResponse.data.data.map((user) => ({
         ...user,
         username: user.email,
         status: user.is_active ? "Active" : "Inactive",
         role: user.role === "admin" ? "Admin" : "Staff",
       }));
-      notifications.value = notificationsResponse.data.data;
-    } else {
-      const notificationsResponse = await api.get("/notifications");
-      notifications.value = notificationsResponse.data.data;
     }
+    await loadNotifications();
   } catch (error) {
     operationError.value = error.response?.data?.message || "Unable to load data.";
+    await loadNotifications();
+  } finally {
+    loading.value = false;
+  }
+}
+async function loadNotifications() {
+  try {
+    const notificationsResponse = await api.get("/notifications");
+    notifications.value = notificationsResponse.data.data;
+  } catch (error) {
+    operationError.value =
+      error.response?.data?.message || "Unable to load notifications.";
   }
 }
 async function submitStockMovement() {
@@ -300,6 +229,8 @@ async function submitStockMovement() {
     const quantity = Number(stockForm.value.quantity);
     if (!stockForm.value.product_id || !Number.isInteger(quantity) || quantity < 1)
       return (operationError.value = "Select a product and enter a positive quantity.");
+    if (route.path === "/stock-in" && !stockForm.value.supplier_id)
+      return (operationError.value = "Select a supplier.");
     if (route.path === "/adjust-stock" && !stockForm.value.reason.trim())
       return (operationError.value = "An adjustment reason is required.");
     try {
@@ -310,6 +241,7 @@ async function submitStockMovement() {
               product_id: Number(stockForm.value.product_id),
               quantity,
               reference: stockForm.value.reference || "STOCK-IN",
+              supplier_id: Number(stockForm.value.supplier_id),
               notes: stockForm.value.reason || "Inventory stock-in",
             }
           : {
@@ -318,7 +250,7 @@ async function submitStockMovement() {
               reason: stockForm.value.reason,
             },
       );
-      stockForm.value = { product_id: "", quantity: 1, reason: "", reference: "" };
+      stockForm.value = { product_id: "", quantity: 1, reason: "", reference: "", supplier_id: "" };
       await refreshData();
     } catch (error) {
       operationError.value = error.response?.data?.message || "Unable to save inventory movement.";
@@ -335,13 +267,88 @@ async function submitStaff() {
       operationError.value = error.response?.data?.message || "Unable to create staff account.";
     }
 }
+async function toggleStaff(person) {
+  try {
+    await api.put(`/users/${person.id}`, {
+      name: person.name,
+      email: person.email,
+      role: (person.role || "staff").toLowerCase(),
+      is_active: person.status !== "Active",
+    });
+    await refreshData();
+  } catch (error) {
+    operationError.value = error.response?.data?.message || "Unable to update account status.";
+  }
+}
 async function markNotificationRead(notification) {
+  if (notification.is_read) return;
+  try {
     await api.patch(`/notifications/${notification.id}/read`);
     notification.is_read = true;
+  } catch (error) {
+    operationError.value = error.response?.data?.message || "Unable to update notification.";
+  }
 }
 async function markAllNotificationsRead() {
+  try {
     await api.post("/notifications/read-all");
     notifications.value.forEach((notification) => (notification.is_read = true));
+  } catch (error) {
+    operationError.value = error.response?.data?.message || "Unable to update notifications.";
+  }
+}
+async function deleteNotification(notification) {
+try {
+  await api.delete(`/notifications/${notification.id}`);
+  notifications.value = notifications.value.filter((item) => item.id !== notification.id);
+} catch (error) {
+  operationError.value = error.response?.data?.message || "Unable to delete notification.";
+}
+}
+async function deleteStaff(person) {
+if (!window.confirm(`Delete ${person.name}'s account?`)) return;
+operationError.value = "";
+try {
+  await api.delete(`/users/${person.id}`);
+  staff.value = staff.value.filter((item) => item.id !== person.id);
+  operationMessage.value = "User account deleted successfully.";
+} catch (error) {
+  operationError.value = error.response?.data?.message || "Unable to delete user account.";
+}
+}
+async function openProfile(person = null) {
+operationError.value = "";
+if (!person || person.id === currentUser.value?.id) {
+  viewedProfile.value = currentUser.value;
+  navigate("/profile");
+  return;
+}
+try {
+  const { data } = await api.get(`/users/${person.id}`);
+  viewedProfile.value = data.data;
+  navigate(`/users/${person.id}/profile`);
+} catch (error) {
+  operationError.value = error.response?.data?.message || "Unable to load profile.";
+}
+function beginProfileEdit() {
+  const profile = viewedProfile.value || currentUser.value;
+  profileForm.value = { name: profile?.name || "", email: profile?.email || "", password: "" };
+  showProfileEdit.value = true;
+}
+async function saveProfile() {
+  try {
+    const payload = { name: profileForm.value.name, email: profileForm.value.email, role: currentUser.value.role, is_active: true };
+    if (profileForm.value.password) payload.password = profileForm.value.password;
+    const response = await api.put(`/users/${currentUser.value.id}`, payload);
+    currentUser.value = response.data.data;
+    sessionStorage.setItem("auth_user", JSON.stringify(currentUser.value));
+    viewedProfile.value = currentUser.value;
+    showProfileEdit.value = false;
+    operationMessage.value = "Profile updated successfully.";
+  } catch (error) {
+    operationError.value = error.response?.data?.message || "Unable to update profile.";
+  }
+}
 }
 
 function readStoredUser() {
@@ -368,8 +375,13 @@ function navigate(path) {
 function addToCart(product) {
   if (!product.quantity) return;
   const existing = cart.value.find((item) => item.id === product.id);
-  if (existing) existing.cartQuantity += 1;
+  if (existing && existing.cartQuantity < product.quantity) existing.cartQuantity += 1;
   else cart.value.push({ ...product, cartQuantity: 1 });
+}
+function changeCartQuantity(item, amount) {
+  const next = item.cartQuantity + amount;
+  if (next < 1) return removeFromCart(item);
+  if (next <= item.quantity) item.cartQuantity = next;
 }
 function removeFromCart(product) {
   cart.value = cart.value.filter((item) => item.id !== product.id);
@@ -393,8 +405,10 @@ async function submitProduct() {
     const payload = {
       ...newProduct.value,
       category_id: category?.id,
-      reorder_level: 5,
-      cost_price: 0,
+      reorder_level: Number(newProduct.value.reorder_level || 0),
+      cost_price: Number(newProduct.value.cost_price || 0),
+      barcode: newProduct.value.barcode || null,
+      description: newProduct.value.description || null,
     };
     const { data } = editingProductId.value
       ? await api.put(`/products/${editingProductId.value}`, payload)
@@ -415,31 +429,32 @@ async function submitProduct() {
   } catch (error) {
     operationError.value = error.response?.data?.message || "Unable to save product.";
   }
-  function editProduct(product) {
-    editingProductId.value = product.id;
-    newProduct.value = {
-      name: product.name,
-      sku: product.sku,
-      brand: product.brand || "",
-      category: product.category?.name || product.category || "Engine Parts",
-      price: product.price,
-      quantity: product.quantity,
-    };
-    showProductModal.value = true;
-  }
+}
+function editProduct(product) {
+  editingProductId.value = product.id;
+  newProduct.value = {
+    name: product.name,
+    sku: product.sku,
+    brand: product.brand || "",
+    category: product.category?.name || product.category || "Engine Parts",
+    price: product.price,
+    quantity: product.quantity,
+  };
+  showProductModal.value = true;
 }
 async function completeSale() {
   operationError.value = "";
-  if (!cart.value.length || Number(cashReceived.value) < cartTotal.value) {
-    operationError.value = "Enter enough cash to complete this sale.";
+  if (!cart.value.length || (paymentMethod.value === "cash" && Number(cashReceived.value) < cartTotal.value)) {
+    operationError.value = "Enter enough payment to complete this sale.";
     return;
   }
   try {
     await api.post("/sales", {
       items: cart.value.map((item) => ({ product_id: item.id, quantity: item.cartQuantity })),
       payment_amount: Number(cashReceived.value),
-      payment_method: "cash",
+      payment_method: paymentMethod.value,
     });
+    lastReceipt.value = data.data;
     cart.value = [];
     cashReceived.value = 0;
     await refreshData();
@@ -447,6 +462,14 @@ async function completeSale() {
   } catch (error) {
     operationError.value = error.response?.data?.message || "Unable to complete sale.";
     await refreshData();
+  }
+  async function viewSale(transaction) {
+    try {
+      const response = await api.get(`/sales/${transaction.saleId || transaction.id}`);
+      selectedSale.value = response.data.data;
+    } catch (error) {
+      operationError.value = error.response?.data?.message || "Unable to load transaction details.";
+    }
   }
 }
 async function submitLogin() {
@@ -547,7 +570,7 @@ async function logout() {
         </button>
       </nav>
       <div class="sidebar-bottom">
-        <button class="sidebar-item profile-item">
+        <button class="sidebar-item profile-item" @click="openProfile()">
           <span class="mini-logo"><Bike :size="13" /></span
           ><span>{{
             currentUser?.name ||
@@ -565,13 +588,14 @@ async function logout() {
         </button>
         <div class="topbar-spacer"></div>
         <button class="top-icon" @click="navigate('/notifications')"><Bell :size="19" /><b v-if="notifications.filter((item) => !item.is_read).length" class="notification-badge">{{ notifications.filter((item) => !item.is_read).length }}</b></button
-        ><button class="top-user" @click="logout">
+        ><button class="top-user" @click="openProfile()">
           <span class="mini-logo"><Bike :size="13" /></span
           ><b>{{ activeRole === "staff" ? "Staff" : "Admin" }}</b
           ><ChevronDown :size="15" />
         </button>
       </header>
       <div class="content-wrap">
+        <div v-if="loading" class="loading-state">Loading data…</div>
         <div class="page-title-row">
           <div>
             <h1>{{ routeName }}</h1>
@@ -757,9 +781,8 @@ async function logout() {
                 placeholder="Search product..."
             /></label>
             <div class="category-tabs">
-              <button class="selected">All</button><button>Engine</button
-              ><button>Brake</button><button>Electrical</button
-              ><button>Tires</button><button>Accessories</button>
+              <button :class="{ selected: selectedCategory === 'All categories' }" @click="selectedCategory = 'All categories'">All</button>
+              <button v-for="category in categories" :key="category.id" :class="{ selected: selectedCategory === category.name }" @click="selectedCategory = category.name">{{ category.name }}</button>
             </div>
             <div class="pos-grid">
               <button
@@ -793,8 +816,8 @@ async function logout() {
                   >{{ item.cartQuantity }} x {{ money(item.price) }}</small
                 >
               </div>
-              <strong>{{ money(item.cartQuantity * item.price) }}</strong
-              ><button @click="removeFromCart(item)">
+              <strong>{{ money(item.cartQuantity * item.price) }}</strong>
+              <button @click="changeCartQuantity(item, -1)">−</button><button @click="changeCartQuantity(item, 1)">+</button><button @click="removeFromCart(item)">
                 <Trash2 :size="16" />
               </button>
             </div>
@@ -802,13 +825,16 @@ async function logout() {
               <div>
                 <b>Total</b><strong>{{ money(cartTotal) }}</strong>
               </div>
-              <label>Cash received<input v-model.number="cashReceived" type="number" min="0" /></label>
+              <label>Payment method<select v-model="paymentMethod"><option value="cash">Cash</option><option value="gcash">GCash</option><option value="card">Card</option></select></label>
+              <label v-if="paymentMethod === 'cash'">Cash received<input v-model.number="cashReceived" type="number" min="0" /></label>
+              <p v-if="paymentMethod === 'cash' && cashReceived >= cartTotal">Change: <b>{{ money(cashReceived - cartTotal) }}</b></p>
               <p v-if="operationError" class="auth-error">{{ operationError }}</p>
               <button class="button outline" @click="cart = []">Cancel</button
               ><button class="button primary" @click="completeSale">
                 Checkout
               </button>
             </div>
+            <div v-if="lastReceipt" class="receipt"><b>Receipt {{ lastReceipt.transaction_number }}</b><span>Total {{ money(lastReceipt.total_amount) }}</span><span>Change {{ money(lastReceipt.change_amount) }}</span></div>
           </aside>
         </section>
 
@@ -816,14 +842,10 @@ async function logout() {
           <div class="white-panel table-panel">
             <div class="toolbar">
               <label class="date-field"
-                ><CalendarDays :size="17" /> 09/01/2026
-                <span>-</span> 10/01/2026</label
+                ><CalendarDays :size="17" /><input v-model="salesFrom" type="date" />
+                <span>-</span><input v-model="salesTo" type="date" /></label
               ><label class="search-field compact"
-                ><Search :size="18" /><input
-                  placeholder="Search transaction..." /></label
-              ><button class="button outline">
-                <SlidersHorizontal :size="17" /> Filter
-              </button>
+                ><Search :size="18" /><input v-model="salesSearch" placeholder="Search transaction..." /></label>
             </div>
             <p v-if="operationMessage" class="success-message">{{ operationMessage }}</p>
             <p v-if="operationError" class="auth-error">{{ operationError }}</p>
@@ -833,12 +855,12 @@ async function logout() {
                 ><span>Total</span><span>Payment Method</span>
               </div>
               <div
-                v-for="transaction in transactions"
+                v-for="transaction in filteredTransactions"
                 :key="transaction.id"
                 class="data-row"
               >
                 <span>{{ transaction.date }}</span
-                ><span>{{ transaction.id }}</span
+                ><button class="link-button" @click="viewSale(transaction)">{{ transaction.id }}</button
                 ><span>{{ transaction.items }}</span
                 ><b>{{ money(transaction.total) }}</b
                 ><span>{{ transaction.payment }}</span>
@@ -919,8 +941,8 @@ async function logout() {
                   person.status
                 }}</strong
                 ><span class="row-actions"
-                  ><button><Settings2 :size="18" /></button
-                  ><button><Trash2 :size="17" /></button
+                  ><button @click="openProfile(person)" title="View profile"><Settings2 :size="18" /></button
+                  ><button @click="toggleStaff(person)" :title="person.status === 'Active' ? 'Deactivate account' : 'Activate account'"><SlidersHorizontal :size="17" /></button><button @click="deleteStaff(person)" title="Delete account"><Trash2 :size="17" /></button
                 ></span>
               </div>
             </div>
@@ -943,10 +965,9 @@ async function logout() {
                   </option>
                 </select></label
               ><label v-if="route.path === '/stock-in'"
-                >Supplier*<select>
-                  <option>Select supplier...</option>
-                  <option>ABC Parts</option>
-                  <option>MotoSupplies</option>
+                >Supplier*<select v-model="stockForm.supplier_id" required>
+                  <option value="">Select supplier...</option>
+                  <option v-for="supplier in suppliers.filter((item) => item.is_active)" :key="supplier.id" :value="supplier.id">{{ supplier.name }}</option>
                 </select></label
               ><label>Quantity<input v-model.number="stockForm.quantity" type="number" min="1" /></label
               ><label v-if="route.path === '/adjust-stock'"
@@ -960,7 +981,7 @@ async function logout() {
               <label v-if="route.path === '/stock-in'">Reference<input v-model="stockForm.reference" placeholder="Supplier invoice or reference" /></label>
               <p v-if="operationError" class="auth-error">{{ operationError }}</p>
               <div class="form-actions">
-                <button class="button outline" @click="stockForm = { product_id: '', quantity: 1, reason: '', reference: '' }">Cancel</button
+                <button class="button outline" @click="stockForm = { product_id: '', quantity: 1, reason: '', reference: '', supplier_id: '' }">Cancel</button
                 ><button class="button primary" @click="submitStockMovement">
                   Save
                   {{ route.path === "/stock-in" ? "Stock In" : "Adjustment" }}
@@ -989,15 +1010,36 @@ async function logout() {
           </div>
         </section>
 
+        <section v-else-if="route.path === '/profile' || route.path.includes('/profile')" class="page-view">
+          <div class="profile-layout">
+            <section class="white-panel profile-card">
+              <span class="profile-avatar"><UserRound :size="34" /></span>
+              <h2>{{ viewedProfile?.name || currentUser?.name }}</h2>
+              <strong class="profile-role">{{ viewedProfile?.role === "admin" ? "Administrator" : "Staff member" }}</strong>
+              <p>{{ viewedProfile?.email || currentUser?.email }}</p>
+              <span class="status active">Active</span>
+            </section>
+            <section class="white-panel profile-details">
+              <div class="panel-title"><h2>Account details</h2><button v-if="activeRole === 'admin' && viewedProfile?.id === currentUser?.id" class="button outline" @click="beginProfileEdit">Edit profile</button></div>
+              <dl>
+                <div><dt>Full name</dt><dd>{{ viewedProfile?.name || currentUser?.name }}</dd></div>
+                <div><dt>Email address</dt><dd>{{ viewedProfile?.email || currentUser?.email }}</dd></div>
+                <div><dt>Role</dt><dd>{{ viewedProfile?.role === "admin" ? "Administrator" : "Staff" }}</dd></div>
+                <div><dt>Account created</dt><dd>{{ viewedProfile?.created_at ? new Date(`${viewedProfile.created_at}Z`).toLocaleDateString() : "—" }}</dd></div>
+              </dl>
+              <p v-if="operationError" class="auth-error">{{ operationError }}</p>
+            </section>
+          </div>
+        </section>
         <section v-else class="page-view">
           <div class="white-panel notification-panel">
             <div class="notification-tabs">
-              <button class="active">Alerts</button
-              ><button>Announcements</button
+              <button :class="{ active: notificationTab === 'alerts' }" @click="notificationTab = 'alerts'">Alerts</button
+              ><button :class="{ active: notificationTab === 'announcements' }" @click="notificationTab = 'announcements'">Announcements</button
               ><button class="text-button" @click="markAllNotificationsRead">Mark all as read</button>
             </div>
             <div
-              v-for="notification in notifications"
+              v-for="notification in visibleNotifications"
               :key="notification.id"
               class="notification-row"
               :class="{ 'unread': !notification.is_read }"
@@ -1011,8 +1053,9 @@ async function logout() {
               <div>
                 <b>{{ notification.title }}</b><small>{{ notification.message }}</small>
               </div>
-              <span>{{ new Date(`${notification.created_at}Z`).toLocaleString() }}</span><Trash2 :size="15" />
+              <span>{{ new Date(`${notification.created_at}Z`).toLocaleString() }}</span><button class="notification-delete" title="Delete notification" @click.stop="deleteNotification(notification)"><Trash2 :size="15" /></button>
             </div>
+            <p v-if="operationError" class="auth-error">{{ operationError }}</p>
             <p v-if="!notifications.length">No notifications yet.</p>
           </div>
         </section>
@@ -1040,20 +1083,16 @@ async function logout() {
         >Brand<input v-model="newProduct.brand" placeholder="e.g. Honda" /></label
       ><label
         >Category<select v-model="newProduct.category">
-          <option>Engine Parts</option>
-          <option>Brake Parts</option>
-          <option>Electrical</option>
-          <option>Tires</option>
-          <option>Accessories</option>
+          <option v-for="category in categories" :key="category.id">{{ category.name }}</option>
         </select></label
       >
       <div class="modal-grid">
         <label
           >Price<input v-model.number="newProduct.price" type="number" /></label
-        ><label
-          >Quantity<input v-model.number="newProduct.quantity" type="number"
-        /></label>
+        ><label>Quantity<input v-model.number="newProduct.quantity" type="number" min="0" /></label>
       </div>
+      <label>Reorder level<input v-model.number="newProduct.reorder_level" type="number" min="0" /></label>
+      <label>Cost price<input v-model.number="newProduct.cost_price" type="number" min="0" /></label>
       <button class="button primary wide" @click="submitProduct">
         {{ editingProductId ? "Update Product" : "Save Product" }}
       </button>
@@ -1070,6 +1109,26 @@ async function logout() {
       <label>Role<select v-model="newStaff.role"><option value="staff">Staff</option><option value="admin">Admin</option></select></label>
       <p v-if="operationError" class="auth-error">{{ operationError }}</p>
       <button class="button primary wide" @click="submitStaff">Save Staff</button>
+    </div>
+  </div>
+  <div v-if="showProfileEdit" class="modal-backdrop" @click.self="showProfileEdit = false">
+    <div class="modal">
+      <button class="modal-close" @click="showProfileEdit = false"><X :size="18" /></button>
+      <h2>Edit profile</h2>
+      <label>Full name<input v-model="profileForm.name" required /></label>
+      <label>Email<input v-model="profileForm.email" type="email" required /></label>
+      <label>New password (optional)<input v-model="profileForm.password" type="password" minlength="8" /></label>
+      <button class="button primary wide" @click="saveProfile">Save changes</button>
+    </div>
+  </div>
+  <div v-if="selectedSale" class="modal-backdrop" @click.self="selectedSale = null">
+    <div class="modal">
+      <button class="modal-close" @click="selectedSale = null"><X :size="18" /></button>
+      <h2>Transaction {{ selectedSale.transaction_number }}</h2>
+      <p v-for="item in selectedSale.items" :key="item.id">{{ item.product?.name }} × {{ item.quantity }} — {{ money(item.line_total) }}</p>
+      <hr /><b>Total {{ money(selectedSale.total_amount) }}</b>
+      <p>Paid {{ money(selectedSale.payment_amount) }} · Change {{ money(selectedSale.change_amount) }}</p>
+      <p>Payment: {{ selectedSale.payment_method }}</p>
     </div>
   </div>
 </template>

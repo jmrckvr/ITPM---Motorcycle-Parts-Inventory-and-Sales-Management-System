@@ -10,14 +10,14 @@ export function issueToken(user) {
   });
 }
 
-export function requireAuth(request, response, next) {
+export async function requireAuth(request, response, next) {
   const token = request.headers.authorization?.startsWith("Bearer ")
     ? request.headers.authorization.slice(7)
     : null;
   if (!token) return response.status(401).json({ message: "Unauthenticated." });
   try {
     const payload = jwt.verify(token, secret);
-    const user = db
+    const user = await db
       .prepare("SELECT * FROM users WHERE id = ?")
       .get(payload.sub);
     if (!user || user.is_active === 0)
@@ -33,4 +33,11 @@ export function requireAdmin(request, response, next) {
   if (request.user?.role !== "admin")
     return response.status(403).json({ message: "Forbidden." });
   return next();
+}
+
+export function requireRole(...roles) {
+  return (request, response, next) =>
+    roles.includes(request.user?.role)
+      ? next()
+      : response.status(403).json({ message: "Forbidden." });
 }

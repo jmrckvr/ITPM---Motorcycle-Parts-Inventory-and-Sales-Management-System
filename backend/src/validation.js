@@ -18,7 +18,7 @@ export const productSchema = z.object({
   description: z.string().nullable().optional(),
   cost_price: z.coerce.number().min(0).default(0),
   price: z.coerce.number().min(0),
-  quantity: z.coerce.number().int().min(0),
+  quantity: z.coerce.number().int().min(0).optional().default(0),
   reorder_level: z.coerce.number().int().min(0),
   is_active: z.boolean().optional(),
 });
@@ -31,9 +31,18 @@ export const userSchema = z.object({
 });
 export const stockInSchema = z.object({
   product_id: z.coerce.number().int().positive(),
+  supplier_id: z.coerce.number().int().positive().nullable().optional(),
   quantity: z.coerce.number().int().min(1),
   reference: z.string().max(100).nullable().optional(),
   notes: z.string().nullable().optional(),
+});
+export const supplierSchema = z.object({
+  name: z.string().min(1).max(150),
+  contact_person: z.string().max(150).nullable().optional(),
+  phone: z.string().max(60).nullable().optional(),
+  email: z.string().email().nullable().optional(),
+  address: z.string().max(255).nullable().optional(),
+  is_active: z.boolean().optional(),
 });
 export const stockAdjustmentSchema = z.object({
   product_id: z.coerce.number().int().positive(),
