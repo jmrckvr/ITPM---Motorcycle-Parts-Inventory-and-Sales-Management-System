@@ -10,11 +10,7 @@ const api = axios.create({
 
 api.interceptors.request.use((config) => {
   const token = sessionStorage.getItem("auth_token");
-
-  if (token) {
-    config.headers.Authorization = `Bearer ${token}`;
-  }
-
+  if (token) config.headers.Authorization = `Bearer ${token}`;
   return config;
 });
 
@@ -25,7 +21,6 @@ api.interceptors.response.use(
       sessionStorage.removeItem("auth_token");
       sessionStorage.removeItem("auth_user");
     }
-
     return Promise.reject(error);
   },
 );

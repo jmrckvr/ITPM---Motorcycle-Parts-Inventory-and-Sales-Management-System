@@ -2,14 +2,14 @@
 
 ## Recommended architecture
 
-A two-application monorepo keeps the Vue client and Laravel REST API independently testable while sharing one MySQL database contract.
+A two-application monorepo keeps the Vue client and Node.js REST API independently testable with a local SQLite database.
 
 - `frontend`: Vue 3 + Vite single-page application, Tailwind CSS, Vue Router, Axios, Chart.js.
-- `backend`: Laravel 12 REST API, Sanctum token authentication, Eloquent models, Form Requests, Policies, API Resources, MySQL.
+- `backend`: Node.js REST API, JWT bearer authentication, SQLite schema initialization, Zod validation, and Express middleware.
 - `docs`: scope, ERD, wireframes, test plans, revisions, and user guide.
-- `database`: schema is owned by Laravel migrations and seeders; do not maintain a second hand-edited schema.
+- `backend/data`: generated SQLite database files are local runtime data and are ignored by Git.
 
-Request flow: Vue page -> Axios API client -> Laravel route/controller -> Form Request + Policy -> Eloquent model/service -> MySQL -> JSON Resource.
+Request flow: Vue page -> Axios API client -> Express route -> validation and auth middleware -> SQLite service -> JSON response.
 
 ## Folder structure
 
@@ -30,11 +30,12 @@ Request flow: Vue page -> Axios API client -> Laravel route/controller -> Form R
 |   |-- vite.config.js
 |   `-- package.json
 |-- backend/
-|   |-- app/Models, Http/Controllers, Http/Requests, Http/Resources, Policies
-|   |-- database/migrations, seeders, factories
-|   |-- routes/api.php
-|   |-- config/cors.php
-|   `-- composer.json
+|   |-- src/server.js
+|   |-- src/db.js
+|   |-- src/auth.js, validation.js
+|   |-- data/                      # generated SQLite database
+|   |-- package.json
+|   `-- .env.example
 |-- docs/
 |   |-- PHASE-2-ARCHITECTURE.md
 |   |-- ERD.md
@@ -115,7 +116,7 @@ Pages: `Login`, `Dashboard`, `Products`, `Categories`, `Inventory`, `StockMoveme
 
 Reusable components: `AppShell`, `Sidebar`, `Topbar`, `StatCard`, `DataTable`, `StatusBadge`, `FormModal`, `ProductSearch`, `CartPanel`, `EmptyState`, and `ConfirmDialog`.
 
-## Laravel API structure
+## Node.js API structure
 
 - `POST /api/auth/login`, `POST /api/auth/logout`, `GET /api/auth/me`
 - `GET|POST|PUT|DELETE /api/products`
@@ -125,29 +126,29 @@ Reusable components: `AppShell`, `Sidebar`, `Topbar`, `StatCard`, `DataTable`, `
 - `GET|POST|PUT|DELETE /api/users` (admin only)
 - `GET /api/reports/sales`, `GET /api/reports/inventory`
 
-Controllers stay thin. Validation belongs in Form Requests, authorization in Policies or middleware, and multi-table inventory/sale updates in dedicated services with `DB::transaction()`.
+Validation belongs in Zod schemas, authorization in Express middleware, and multi-table inventory/sale updates execute inside SQLite transactions.
 
 ## Authentication and roles
 
-Sanctum authenticates a user after login and returns a token for the Axios client. The frontend stores only the token and basic user profile in session storage, sends `Authorization: Bearer <token>`, and redirects unauthenticated users to Login.
+JWT authenticates a user after login and returns a token for the Axios client. The frontend stores only the token and basic user profile in session storage, sends `Authorization: Bearer <token>`, and redirects unauthenticated users to Login.
 
 - Admin: products, categories, inventory, stock movements, reports, users, and sales.
 - Staff: products/inventory lookup, stock movements as authorized, POS, own sales history, and reports allowed by policy.
 
-Passwords are hashed by Laravel. No passwords or tokens are logged or committed.
+Passwords are hashed with bcrypt. No passwords or tokens are logged or committed.
 
 ## Phase 2 TODO checklist
 
 - [x] Confirm scope, roles, deliverables, and acceptance criteria.
 - [x] Scaffold Vue 3 + Vite frontend.
-- [x] Scaffold Laravel REST backend.
-- [x] Install Tailwind CSS, Axios, Vue Router, Chart.js, and Sanctum.
+- [x] Scaffold Node.js REST backend.
+- [x] Install Tailwind CSS, Axios, Vue Router, Chart.js, and Node API dependencies.
 - [x] Initialize monorepo folder structure and architecture notes.
 - [x] Create initial database/ERD design.
 - [x] Create responsive login/navigation/dashboard/POS/inventory wireframe prototype.
-- [ ] Add Laravel migrations, models, seeders, and role middleware in Phase 3.
-- [ ] Connect the login prototype to Sanctum in Phase 3.
-- [ ] Validate the database in MySQL and record the connection settings.
+- [x] Add SQLite schema, models, seed accounts, and role middleware.
+- [x] Connect the login prototype to the Node.js JWT API.
+- [x] Initialize the local database and validate the inventory and sales workflow.
 
 ## Development commands
 
@@ -159,7 +160,9 @@ npm install
 npm run dev
 
 cd ..\backend
-php artisan serve
+npm install
+Copy-Item .env.example .env
+npm run dev
 ```
 
-Set `VITE_API_BASE_URL=http://127.0.0.1:8000/api` in `frontend/.env` when API work begins. Copy `backend/.env.example` to `backend/.env`, set the MySQL database values, and run `php artisan migrate --seed` after Phase 3 migrations exist.
+The frontend already defaults to `VITE_API_BASE_URL=http://127.0.0.1:8000/api`. Copy `backend/.env.example` to `backend/.env` to customize the port, JWT secret, SQLite file, or frontend origin.
