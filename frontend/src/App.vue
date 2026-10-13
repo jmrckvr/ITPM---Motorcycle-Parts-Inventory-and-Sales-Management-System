@@ -1073,7 +1073,13 @@ async function logout() {
             >
               <span
                 class="metric-icon"
-                :class="notification.type === 'inventory' ? 'yellow' : 'blue'"
+                :class="
+                  notification.type === 'inventory'
+                    ? notification.title.toLowerCase().includes('out of stock')
+                      ? 'red'
+                      : 'yellow'
+                    : 'blue'
+                "
                 ><AlertTriangle :size="21"
               /></span>
               <div>

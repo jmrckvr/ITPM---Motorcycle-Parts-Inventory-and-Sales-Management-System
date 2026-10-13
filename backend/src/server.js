@@ -288,7 +288,7 @@ api.post("/stock-movements", async (request, response, next) => {
         .prepare("SELECT * FROM stock_movements WHERE id = ?")
         .get(Number(result.lastInsertRowid));
     });
-    createNotification({
+    await createNotification({
       role: "admin",
       title: "Stock-in completed",
       message: `${product.name}: ${data.quantity} unit(s) received.`,
@@ -317,14 +317,14 @@ api.post("/stock-out", async (request, response, next) => {
       ).run(product.id, request.user.id, data.quantity, quantityAfter, data.reason);
       return await tx.prepare("SELECT * FROM stock_movements WHERE id = ?").get(Number(result.lastInsertRowid));
     });
-    createNotification({
+    await createNotification({
       role: "admin",
       title: "Stock adjustment recorded",
       message: `${product.name}: ${data.quantity} unit(s) removed. ${data.reason}`,
       type: "stock",
     });
     if (product.quantity - data.quantity <= product.reorder_level)
-      createNotification({
+      await createNotification({
         role: "admin",
         title: product.quantity - data.quantity === 0 ? "Out of stock alert" : "Low stock alert",
         message: `${product.name} now has ${product.quantity - data.quantity} unit(s).`,
@@ -344,6 +344,7 @@ api.get("/sales", async (_request, response) =>
 api.post("/sales", async (request, response, next) => {
   try {
     const { items, payment_amount, payment_method } = parse(saleSchema, request.body);
+    const depletedProducts = [];
     const sale = await db.transaction(async (tx) => {
       const saleItems = [];
       let totalAmount = 0;
@@ -366,6 +367,11 @@ api.post("/sales", async (request, response, next) => {
         const lineTotal = product.price * quantity;
         totalAmount += lineTotal;
         const quantityAfter = product.quantity - quantity;
+        if (quantityAfter <= product.reorder_level)
+          depletedProducts.push({
+            name: product.name,
+            quantity: quantityAfter,
+          });
         await tx.prepare(
           "UPDATE products SET quantity = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
         ).run(quantityAfter, product.id);
@@ -404,6 +410,13 @@ api.post("/sales", async (request, response, next) => {
         .prepare("SELECT * FROM sales WHERE id = ?")
         .get(Number(saleResult.lastInsertRowid));
     });
+    for (const product of depletedProducts)
+      await createNotification({
+        role: "admin",
+        title: product.quantity === 0 ? "Out of stock alert" : "Low stock alert",
+        message: `${product.name} now has ${product.quantity} unit(s) after a sale.`,
+        type: "inventory",
+      });
     return response.json({
       message: "Sale processed successfully.",
       data: await saleView(sale),
