@@ -957,6 +957,24 @@ async function logout() {
         >
           <div class="white-panel form-panel">
             <div class="form-fields">
+              <div class="form-heading">
+                <span class="form-heading-icon"><Box :size="20" /></span>
+                <div>
+                  <span class="eyebrow">{{
+                    route.path === "/stock-in" ? "Inventory receiving" : "Inventory control"
+                  }}</span>
+                  <h2>{{
+                    route.path === "/stock-in"
+                      ? "Add stock to inventory"
+                      : "Record a stock adjustment"
+                  }}</h2>
+                  <p>{{
+                    route.path === "/stock-in"
+                      ? "Capture incoming parts accurately so your inventory stays up to date."
+                      : "Keep a clear record whenever available stock needs to be corrected."
+                  }}</p>
+                </div>
+              </div>
               <label
                 >Product*<select v-model="stockForm.product_id">
                   <option value="">Select product...</option>
@@ -989,6 +1007,10 @@ async function logout() {
               </div>
             </div>
             <div class="white-panel helper-panel">
+              <div class="helper-heading">
+                <span class="helper-icon"><ClipboardList :size="18" /></span>
+                <span class="eyebrow">Activity log</span>
+              </div>
               <h2>
                 {{
                   route.path === "/stock-in"
@@ -1004,7 +1026,11 @@ async function logout() {
                   <b>{{ movement.product?.name }}</b>
                   <span>{{ movement.type }}: {{ movement.quantity }} unit(s)</span>
                 </div>
-                <small v-if="!stockMovements.length">No inventory movements yet.</small>
+                <div v-if="!stockMovements.length" class="empty-state">
+                  <span class="empty-state-icon"><Box :size="20" /></span>
+                  <b>No activity yet</b>
+                  <small>Your recent inventory movements will appear here.</small>
+                </div>
               </div>
             </div>
           </div>
