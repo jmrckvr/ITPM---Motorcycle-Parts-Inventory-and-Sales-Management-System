@@ -24,4 +24,4 @@ Copy-Item .env.example .env
 npm run dev
 ```
 
-The API creates a fresh local SQLite database and seed accounts on first start.
+The API creates the local SQLite database and seed accounts on first start.

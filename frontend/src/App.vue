@@ -50,6 +50,8 @@ const dashboard = ref({
   transaction_count: 0,
   recent: [],
 });
+const reportSummary = ref({ total_sales: 0, transaction_count: 0, total_paid: 0, total_change: 0 });
+const reportInventory = ref([]);
 const cashReceived = ref(0);
 const operationError = ref("");
 const operationMessage = ref("");
@@ -87,7 +89,11 @@ const newProduct = ref({
   brand: "",
   category: "Engine Parts",
   price: 0,
+  cost_price: 0,
   quantity: 0,
+  reorder_level: 0,
+  barcode: "",
+  description: "",
 });
 
 const filteredTransactions = computed(() => transactions.value.filter((sale) => {
@@ -206,6 +212,12 @@ async function refreshData() {
         status: user.is_active ? "Active" : "Inactive",
         role: user.role === "admin" ? "Admin" : "Staff",
       }));
+      const [salesReportResponse, inventoryReportResponse] = await Promise.all([
+        api.get("/reports/sales"),
+        api.get("/reports/inventory"),
+      ]);
+      reportSummary.value = salesReportResponse.data.summary;
+      reportInventory.value = inventoryReportResponse.data.data || [];
     }
     await loadNotifications();
   } catch (error) {
@@ -337,9 +349,9 @@ function beginProfileEdit() {
 }
 async function saveProfile() {
   try {
-    const payload = { name: profileForm.value.name, email: profileForm.value.email, role: currentUser.value.role, is_active: true };
+    const payload = { name: profileForm.value.name, email: profileForm.value.email };
     if (profileForm.value.password) payload.password = profileForm.value.password;
-    const response = await api.put(`/users/${currentUser.value.id}`, payload);
+    const response = await api.put("/profile", payload);
     currentUser.value = response.data.data;
     sessionStorage.setItem("auth_user", JSON.stringify(currentUser.value));
     viewedProfile.value = currentUser.value;
@@ -410,6 +422,7 @@ async function submitProduct() {
       barcode: newProduct.value.barcode || null,
       description: newProduct.value.description || null,
     };
+    if (!payload.category_id) throw new Error("Select a valid product category.");
     const { data } = editingProductId.value
       ? await api.put(`/products/${editingProductId.value}`, payload)
       : await api.post("/products", payload);
@@ -422,7 +435,7 @@ async function submitProduct() {
       const index = products.value.findIndex((item) => item.id === editingProductId.value);
       if (index >= 0) products.value[index] = saved;
     } else products.value.unshift(saved);
-    newProduct.value = { name: "", sku: "", brand: "", category: "Engine Parts", price: 0, quantity: 0 };
+    newProduct.value = { name: "", sku: "", brand: "", category: "Engine Parts", price: 0, cost_price: 0, quantity: 0, reorder_level: 0, barcode: "", description: "" };
     editingProductId.value = null;
     showProductModal.value = false;
     operationMessage.value = `Product ${isEditing ? "updated" : "saved"} successfully.`;
@@ -438,7 +451,11 @@ function editProduct(product) {
     brand: product.brand || "",
     category: product.category?.name || product.category || "Engine Parts",
     price: product.price,
+    cost_price: product.cost_price || 0,
     quantity: product.quantity,
+    reorder_level: product.reorder_level || 0,
+    barcode: product.barcode || "",
+    description: product.description || "",
   };
   showProductModal.value = true;
 }
@@ -449,7 +466,7 @@ async function completeSale() {
     return;
   }
   try {
-    await api.post("/sales", {
+    const { data } = await api.post("/sales", {
       items: cart.value.map((item) => ({ product_id: item.id, quantity: item.cartQuantity })),
       payment_amount: Number(cashReceived.value),
       payment_method: paymentMethod.value,
@@ -463,13 +480,13 @@ async function completeSale() {
     operationError.value = error.response?.data?.message || "Unable to complete sale.";
     await refreshData();
   }
-  async function viewSale(transaction) {
-    try {
-      const response = await api.get(`/sales/${transaction.saleId || transaction.id}`);
-      selectedSale.value = response.data.data;
-    } catch (error) {
-      operationError.value = error.response?.data?.message || "Unable to load transaction details.";
-    }
+}
+async function viewSale(transaction) {
+  try {
+    const response = await api.get(`/sales/${transaction.saleId || transaction.id}`);
+    selectedSale.value = response.data.data;
+  } catch (error) {
+    operationError.value = error.response?.data?.message || "Unable to load transaction details.";
   }
 }
 async function submitLogin() {
@@ -731,7 +748,7 @@ async function logout() {
               ><button
                 v-if="route.path === '/products'"
                 class="button primary"
-                @click="editingProductId = null; newProduct = { name: '', sku: '', brand: '', category: 'Engine Parts', price: 0, quantity: 0 }; showProductModal = true"
+                @click="editingProductId = null; newProduct = { name: '', sku: '', brand: '', category: 'Engine Parts', price: 0, cost_price: 0, quantity: 0, reorder_level: 0, barcode: '', description: '' }; showProductModal = true"
               >
                 <Plus :size="18" /> Add Product
               </button>
@@ -870,24 +887,24 @@ async function logout() {
         </section>
 
         <section v-else-if="route.path === '/reports'" class="page-view">
-          <div class="report-date">September 27, 2026</div>
+          <div class="report-date">{{ new Date().toLocaleDateString("en-PH", { year: "numeric", month: "long", day: "numeric" }) }}</div>
           <div class="metric-grid three">
             <article class="metric-card">
               <span class="metric-icon blue"><Settings2 :size="22" /></span>
-              <div><small>Products Sold</small><strong>{{ dashboard.recent.reduce((sum, sale) => sum + (sale.items?.reduce((items, item) => items + item.quantity, 0) || 0), 0) }}</strong></div>
+              <div><small>Transactions</small><strong>{{ reportSummary.transaction_count }}</strong></div>
             </article>
             <article class="metric-card">
               <span class="metric-icon yellow"
                 ><ClipboardList :size="22"
               /></span>
-              <div><small>Transactions</small><strong>{{ dashboard.transaction_count }}</strong></div>
+              <div><small>Recorded Sales</small><strong>{{ money(reportSummary.total_sales) }}</strong></div>
             </article>
             <article class="metric-card">
               <span class="metric-icon green"
                 ><CircleDollarSign :size="22"
               /></span>
               <div>
-                <small>Today's Sales</small><strong>{{ money(dashboard.todays_sales) }}</strong>
+                <small>Products Tracked</small><strong>{{ reportInventory.length }}</strong>
               </div>
             </article>
           </div>
@@ -1046,7 +1063,7 @@ async function logout() {
               <span class="status active">Active</span>
             </section>
             <section class="white-panel profile-details">
-              <div class="panel-title"><h2>Account details</h2><button v-if="activeRole === 'admin' && viewedProfile?.id === currentUser?.id" class="button outline" @click="beginProfileEdit">Edit profile</button></div>
+              <div class="panel-title"><h2>Account details</h2><button v-if="viewedProfile?.id === currentUser?.id" class="button outline" @click="beginProfileEdit">Edit profile</button></div>
               <dl>
                 <div><dt>Full name</dt><dd>{{ viewedProfile?.name || currentUser?.name }}</dd></div>
                 <div><dt>Email address</dt><dd>{{ viewedProfile?.email || currentUser?.email }}</dd></div>

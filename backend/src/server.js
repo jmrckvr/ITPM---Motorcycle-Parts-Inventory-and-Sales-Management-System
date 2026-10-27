@@ -121,7 +121,7 @@ api.get("/dashboard/summary", async (_request, response) => {
   `).get();
   const sales = await db.prepare(`
     SELECT COALESCE(SUM(total_amount), 0) AS todays_sales, COUNT(*) AS transaction_count
-    FROM sales WHERE status = 'completed' AND DATE(sold_at) = CURDATE()
+    FROM sales WHERE status = 'completed' AND DATE(sold_at) = DATE('now')
   `).get();
   const recent = await Promise.all((await db.prepare("SELECT * FROM sales ORDER BY sold_at DESC, id DESC LIMIT 5").all()).map(saleView));
   return response.json({ data: { ...stats, ...sales, recent } });
@@ -478,6 +478,10 @@ api.get("/users", requireAdmin, async (_request, response) =>
     data: (await db.prepare("SELECT id, name, email, role, is_active, created_at, updated_at FROM users ORDER BY created_at DESC, id DESC").all()).map(userView),
   }),
 );
+api.put("/profile", async (request, response, next) => {
+  request.params.id = request.user.id;
+  return saveUser(request, response, next, true);
+});
 api.get("/users/:id", requireAdmin, async (request, response) => {
   const user = await db.prepare(
       "SELECT id, name, email, role, is_active, created_at, updated_at FROM users WHERE id = ?",
