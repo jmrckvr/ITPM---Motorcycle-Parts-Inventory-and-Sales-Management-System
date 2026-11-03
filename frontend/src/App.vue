@@ -3,6 +3,8 @@ import { computed, onMounted, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import {
   AlertTriangle,
+  ArrowDownToLine,
+  ArrowUpFromLine,
   Bell,
   Bike,
   Box,
@@ -10,23 +12,27 @@ import {
   ChevronDown,
   CircleDollarSign,
   ClipboardList,
+  Download,
   FileChartColumnIncreasing,
   Home,
   LogOut,
   Menu,
   Plus,
+  RefreshCw,
   Search,
   Settings2,
   ShoppingBag,
   ShoppingCart,
   SlidersHorizontal,
   Trash2,
+  Upload,
   UserRound,
   Users,
   Warehouse,
   X,
 } from "@lucide/vue";
 import api from "./services/api";
+import bszLogo from "./assets/bsz-logo.png";
 
 const route = useRoute();
 const router = useRouter();
@@ -52,6 +58,14 @@ const dashboard = ref({
 });
 const reportSummary = ref({ total_sales: 0, transaction_count: 0, total_paid: 0, total_change: 0 });
 const reportInventory = ref([]);
+const reportSales = ref([]);
+const reportMovements = ref([]);
+const reportDailySales = ref([]);
+const reportLowStock = ref([]);
+const reportFrom = ref("");
+const reportTo = ref("");
+const reportCategory = ref("overview");
+const reportLoading = ref(false);
 const cashReceived = ref(0);
 const operationError = ref("");
 const operationMessage = ref("");
@@ -163,6 +177,22 @@ const inventoryStats = computed(() => ({
 const cartTotal = computed(() =>
   cart.value.reduce((sum, item) => sum + item.price * item.cartQuantity, 0),
 );
+const selectedStockProduct = computed(() =>
+  products.value.find((product) => product.id === Number(stockForm.value.product_id)),
+);
+const staffStats = computed(() => ({
+  total: staff.value.length,
+  active: staff.value.filter((person) => person.status === "Active").length,
+  admins: staff.value.filter((person) => person.role === "Admin").length,
+}));
+const reportInventoryStatus = computed(() => ({
+  healthy: reportInventory.value.filter((item) => !item.low_stock && !item.out_of_stock).length,
+  low: reportInventory.value.filter((item) => item.low_stock).length,
+  out: reportInventory.value.filter((item) => item.out_of_stock).length,
+}));
+const reportChartMax = computed(() =>
+  Math.max(...reportDailySales.value.map((item) => Number(item.total)), 1),
+);
 
 onMounted(async () => {
   if (!isAuthenticated.value) return;
@@ -212,12 +242,7 @@ async function refreshData() {
         status: user.is_active ? "Active" : "Inactive",
         role: user.role === "admin" ? "Admin" : "Staff",
       }));
-      const [salesReportResponse, inventoryReportResponse] = await Promise.all([
-        api.get("/reports/sales"),
-        api.get("/reports/inventory"),
-      ]);
-      reportSummary.value = salesReportResponse.data.summary;
-      reportInventory.value = inventoryReportResponse.data.data || [];
+      await loadReport();
     }
     await loadNotifications();
   } catch (error) {
@@ -226,6 +251,56 @@ async function refreshData() {
   } finally {
     loading.value = false;
   }
+}
+async function loadReport() {
+  reportLoading.value = true;
+  try {
+    const params = new URLSearchParams();
+    if (reportFrom.value) params.set("from", reportFrom.value);
+    if (reportTo.value) params.set("to", reportTo.value);
+    const { data } = await api.get(`/reports/overview${params.toString() ? `?${params}` : ""}`);
+    reportSummary.value = data.summary;
+    reportInventory.value = data.inventory || [];
+    reportSales.value = data.sales || [];
+    reportMovements.value = data.movements || [];
+    reportDailySales.value = data.daily_sales || [];
+    reportLowStock.value = data.low_stock || [];
+  } catch (error) {
+    operationError.value = error.response?.data?.message || "Unable to load reports.";
+  } finally {
+    reportLoading.value = false;
+  }
+}
+function setReportRange(days) {
+  const end = new Date();
+  const start = new Date();
+  start.setDate(end.getDate() - days + 1);
+  reportFrom.value = formatDateInput(start);
+  reportTo.value = formatDateInput(end);
+  loadReport();
+}
+function formatDateInput(value) {
+  return value.toISOString().slice(0, 10);
+}
+function formatReportDate(value) {
+  return new Date(`${value}T00:00:00`).toLocaleDateString("en-PH", { month: "short", day: "numeric" });
+}
+function exportReport() {
+  const includeSales = reportCategory.value === "overview" || reportCategory.value === "sales";
+  const includeMovements = reportCategory.value === "overview" || reportCategory.value === "movements";
+  const includeInventory = reportCategory.value === "overview" || reportCategory.value === "inventory";
+  const rows = [
+    ["Report", "Date", "Reference", "Amount", "Type", "Stock"],
+    ...(includeSales ? reportSales.value.map((sale) => [reportCategory.value, sale.sold_at, sale.transaction_number, sale.total_amount, "Sale", ""]) : []),
+    ...(includeMovements ? reportMovements.value.map((movement) => [reportCategory.value, movement.created_at, movement.product?.name || "", movement.quantity, movement.type, movement.quantity_after]) : []),
+    ...(includeInventory ? reportInventory.value.map((product) => ["inventory", product.updated_at, product.sku, product.price, statusFor(product), product.stock_on_hand]) : []),
+  ];
+  const csv = rows.map((row) => row.map((value) => `"${String(value ?? "").replaceAll('"', '""')}"`).join(",")).join("\n");
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
+  link.download = `motoparts-report-${formatDateInput(new Date())}.csv`;
+  link.click();
+  URL.revokeObjectURL(link.href);
 }
 async function loadNotifications() {
   try {
@@ -421,6 +496,7 @@ async function submitProduct() {
       cost_price: Number(newProduct.value.cost_price || 0),
       barcode: newProduct.value.barcode || null,
       description: newProduct.value.description || null,
+      image_data: newProduct.value.image_data || null,
     };
     if (!payload.category_id) throw new Error("Select a valid product category.");
     const { data } = editingProductId.value
@@ -435,7 +511,7 @@ async function submitProduct() {
       const index = products.value.findIndex((item) => item.id === editingProductId.value);
       if (index >= 0) products.value[index] = saved;
     } else products.value.unshift(saved);
-    newProduct.value = { name: "", sku: "", brand: "", category: "Engine Parts", price: 0, cost_price: 0, quantity: 0, reorder_level: 0, barcode: "", description: "" };
+    newProduct.value = emptyProduct();
     editingProductId.value = null;
     showProductModal.value = false;
     operationMessage.value = `Product ${isEditing ? "updated" : "saved"} successfully.`;
@@ -456,8 +532,35 @@ function editProduct(product) {
     reorder_level: product.reorder_level || 0,
     barcode: product.barcode || "",
     description: product.description || "",
+    image_data: product.image_data || "",
   };
   showProductModal.value = true;
+}
+function emptyProduct() {
+  return { name: "", sku: "", brand: "", category: "Engine Parts", price: 0, cost_price: 0, quantity: 0, reorder_level: 0, barcode: "", description: "", image_data: "" };
+}
+function uploadProductImage(event) {
+  const file = event.target.files?.[0];
+  if (!file) return;
+  if (!["image/jpeg", "image/png", "image/webp", "image/gif"].includes(file.type)) {
+    operationError.value = "Choose a JPG, PNG, WEBP, or GIF image.";
+    event.target.value = "";
+    return;
+  }
+  if (file.size > 5 * 1024 * 1024) {
+    operationError.value = "Product images must be 5 MB or smaller.";
+    event.target.value = "";
+    return;
+  }
+  const reader = new FileReader();
+  reader.onload = () => {
+    newProduct.value.image_data = String(reader.result);
+    operationError.value = "";
+  };
+  reader.onerror = () => {
+    operationError.value = "Unable to read the selected image.";
+  };
+  reader.readAsDataURL(file);
 }
 async function completeSale() {
   operationError.value = "";
@@ -524,17 +627,22 @@ async function logout() {
   <div v-if="!isAuthenticated || route.path === '/login'" class="auth-screen">
     <div class="auth-brand-panel">
       <div class="brand-lockup auth-lockup">
-        <span class="brand-symbol"><Bike :size="24" /></span
-        ><strong>BSZ Tarluck</strong>
+        <img class="brand-logo" :src="bszLogo" alt="BSZ Motorcycle Parts and Accessories" />
+        <strong>BSZ Motorcycle</strong>
       </div>
 
       <div class="auth-illustration">
-        <Bike :size="88" stroke-width="1.1" />
+        <img :src="bszLogo" alt="" />
       </div>
-      <h2>Motorcycle Parts Inventory<br />and Sales Management System</h2>
+      <div class="auth-brand-copy">
+        <span class="eyebrow">Parts &amp; accessories</span>
+        <h2>Everything your workshop needs,<br />in one place.</h2>
+        <p>Manage stock, sales, and your team with confidence.</p>
+      </div>
     </div>
     <div class="auth-form-panel">
       <div class="auth-card">
+        <img class="auth-card-logo" :src="bszLogo" alt="BSZ Motorcycle" />
         <h1>Welcome Back!</h1>
         <p>Sign in to your account</p>
         <form @submit.prevent="submitLogin">
@@ -561,15 +669,15 @@ async function logout() {
           >Demo: admin@motoparts.test / password123</small
         >
       </div>
-      <small class="copyright">2026 BSZ Tarluck. All rights reserved</small>
+      <small class="copyright">2026 BSZ Motorcycle Parts &amp; Accessories. All rights reserved</small>
     </div>
   </div>
 
   <div v-else class="dashboard-shell">
     <aside class="sidebar" :class="{ open: mobileMenuOpen }">
       <div class="brand-lockup sidebar-brand">
-        <span class="brand-symbol"><Bike :size="23" /></span
-        ><strong>BSZ Tarluck</strong>
+        <img class="brand-logo" :src="bszLogo" alt="BSZ Motorcycle Parts and Accessories" />
+        <span><strong>BSZ</strong><small>Motorcycle Parts</small></span>
       </div>
       <nav class="sidebar-nav">
         <button
@@ -588,7 +696,7 @@ async function logout() {
       </nav>
       <div class="sidebar-bottom">
         <button class="sidebar-item profile-item" @click="openProfile()">
-          <span class="mini-logo"><Bike :size="13" /></span
+          <span class="mini-logo"><img :src="bszLogo" alt="" /></span
           ><span>{{
             currentUser?.name ||
             (activeRole === "staff" ? "Juan Dela Cruz" : "Admin")
@@ -606,7 +714,7 @@ async function logout() {
         <div class="topbar-spacer"></div>
         <button class="top-icon" @click="navigate('/notifications')"><Bell :size="19" /><b v-if="notifications.filter((item) => !item.is_read).length" class="notification-badge">{{ notifications.filter((item) => !item.is_read).length }}</b></button
         ><button class="top-user" @click="openProfile()">
-          <span class="mini-logo"><Bike :size="13" /></span
+          <span class="mini-logo"><img :src="bszLogo" alt="" /></span
           ><b>{{ activeRole === "staff" ? "Staff" : "Admin" }}</b
           ><ChevronDown :size="15" />
         </button>
@@ -614,11 +722,14 @@ async function logout() {
       <div class="content-wrap">
         <div v-if="loading" class="loading-state">Loading data…</div>
         <div class="page-title-row">
-          <div>
+          <div class="page-heading">
+            <img class="page-heading-logo" :src="bszLogo" alt="" />
+            <div>
             <h1>{{ routeName }}</h1>
             <div class="breadcrumbs">
               <span>{{ activeRole === "staff" ? "Staff" : "Admin" }}</span
               ><span>/</span><b>{{ routeName }}</b>
+            </div>
             </div>
           </div>
           <button
@@ -748,7 +859,7 @@ async function logout() {
               ><button
                 v-if="route.path === '/products'"
                 class="button primary"
-                @click="editingProductId = null; newProduct = { name: '', sku: '', brand: '', category: 'Engine Parts', price: 0, cost_price: 0, quantity: 0, reorder_level: 0, barcode: '', description: '' }; showProductModal = true"
+                @click="editingProductId = null; newProduct = emptyProduct(); showProductModal = true"
               >
                 <Plus :size="18" /> Add Product
               </button>
@@ -766,7 +877,7 @@ async function logout() {
                 :key="product.id"
                 class="data-row"
               >
-                <span class="product-thumb"><Bike :size="24" /></span
+                <span class="product-thumb"><img v-if="product.image_data" :src="product.image_data" :alt="product.name" /><Bike v-else :size="24" /></span
                 ><span
                   ><b>{{ product.name }}</b
                   ><em>{{ product.brand }}</em></span
@@ -809,7 +920,7 @@ async function logout() {
                 :disabled="!product.quantity"
                 @click="addToCart(product)"
               >
-                <span class="product-thumb large"><Bike :size="35" /></span
+                <span class="product-thumb large"><img v-if="product.image_data" :src="product.image_data" :alt="product.name" /><Bike v-else :size="35" /></span
                 ><b>{{ product.name }}</b
                 ><small>{{ money(product.price) }}</small
                 ><em :class="{ sold: !product.quantity }">{{
@@ -826,7 +937,7 @@ async function logout() {
               <button class="text-button">View All</button>
             </div>
             <div v-for="item in cart" :key="item.id" class="cart-item">
-              <span class="product-thumb"><Bike :size="22" /></span>
+              <span class="product-thumb"><img v-if="item.image_data" :src="item.image_data" :alt="item.name" /><Bike v-else :size="22" /></span>
               <div>
                 <b>{{ item.name }}</b
                 ><small
@@ -887,54 +998,53 @@ async function logout() {
         </section>
 
         <section v-else-if="route.path === '/reports'" class="page-view">
-          <div class="report-date">{{ new Date().toLocaleDateString("en-PH", { year: "numeric", month: "long", day: "numeric" }) }}</div>
-          <div class="metric-grid three">
-            <article class="metric-card">
-              <span class="metric-icon blue"><Settings2 :size="22" /></span>
-              <div><small>Transactions</small><strong>{{ reportSummary.transaction_count }}</strong></div>
-            </article>
-            <article class="metric-card">
-              <span class="metric-icon yellow"
-                ><ClipboardList :size="22"
-              /></span>
-              <div><small>Recorded Sales</small><strong>{{ money(reportSummary.total_sales) }}</strong></div>
-            </article>
-            <article class="metric-card">
-              <span class="metric-icon green"
-                ><CircleDollarSign :size="22"
-              /></span>
-              <div>
-                <small>Products Tracked</small><strong>{{ reportInventory.length }}</strong>
-              </div>
-            </article>
+          <div class="report-header">
+            <div><span class="eyebrow">Business intelligence</span><h2>Reports &amp; monitoring</h2><p>Real-time visibility into sales performance and inventory health.</p></div>
+            <div class="report-actions"><button class="button outline" :disabled="reportLoading" @click="loadReport"><RefreshCw :size="16" :class="{ spinning: reportLoading }" /> Refresh</button><button class="button primary" @click="exportReport"><Download :size="16" /> Export CSV</button></div>
+          </div>
+          <div class="report-filters white-panel">
+            <label>From<input v-model="reportFrom" type="date" /></label><label>To<input v-model="reportTo" type="date" /></label>
+            <label>Report category<select v-model="reportCategory"><option value="overview">Overview</option><option value="sales">Sales</option><option value="inventory">Inventory</option><option value="movements">Stock movements</option></select></label>
+            <div class="report-presets"><button @click="setReportRange(7)">7 days</button><button @click="setReportRange(30)">30 days</button><button @click="setReportRange(90)">90 days</button><button class="button primary" @click="loadReport">Apply filters</button></div>
+          </div>
+          <div class="metric-grid report-metrics">
+            <article class="metric-card"><span class="metric-icon blue"><CircleDollarSign :size="21" /></span><div><small>Sales revenue</small><strong>{{ money(reportSummary.total_sales) }}</strong><em>{{ reportSummary.transaction_count }} transactions</em></div></article>
+            <article class="metric-card"><span class="metric-icon green"><ClipboardList :size="21" /></span><div><small>Units in inventory</small><strong>{{ reportSummary.inventory_units || 0 }}</strong><em>{{ reportSummary.products_tracked || 0 }} products tracked</em></div></article>
+            <article class="metric-card"><span class="metric-icon yellow"><AlertTriangle :size="21" /></span><div><small>Low-stock alerts</small><strong>{{ (reportSummary.low_stock_count || 0) + (reportSummary.out_of_stock_count || 0) }}</strong><em>{{ reportSummary.out_of_stock_count || 0 }} out of stock</em></div></article>
+            <article class="metric-card"><span class="metric-icon blue"><ArrowDownToLine :size="21" /></span><div><small>Stock movements</small><strong>{{ (reportSummary.stock_in_count || 0) + (reportSummary.stock_out_count || 0) }}</strong><em>{{ reportSummary.stock_in_count || 0 }} in · {{ reportSummary.stock_out_count || 0 }} out</em></div></article>
           </div>
           <div class="dashboard-grid reports-grid">
-            <section class="white-panel chart-panel">
-              <div class="panel-title">
-                <h2>Sales Report</h2>
-                <span class="date-chip">09/15/2026 - 09/21/2026</span>
+            <section class="white-panel chart-panel report-chart">
+              <div class="panel-title"><div><h2>Sales performance</h2><small>{{ reportDailySales.length }} active days in selected range</small></div><span class="date-chip">{{ reportFrom || "All time" }}{{ reportTo ? ` - ${reportTo}` : "" }}</span></div>
+              <div v-if="reportDailySales.length" class="bar-chart tall data-bars">
+                <span v-for="item in reportDailySales" :key="item.date" :style="{ height: `${Math.max((Number(item.total) / reportChartMax) * 100, 4)}%` }" :title="`${formatReportDate(item.date)}: ${money(item.total)}`"></span>
               </div>
-              <div class="bar-chart tall">
-                <span
-                  v-for="height in [42, 54, 76, 61, 35, 79, 48]"
-                  :key="height"
-                  :style="{ height: `${height}%` }"
-                ></span>
-              </div>
+              <div v-else class="empty-state"><span class="empty-state-icon"><CircleDollarSign :size="20" /></span><b>No sales in this period</b><small>Try a wider date range to see performance.</small></div>
+              <div v-if="reportDailySales.length" class="chart-labels"><span v-for="item in reportDailySales" :key="item.date">{{ formatReportDate(item.date) }}</span></div>
             </section>
             <section class="white-panel inventory-status">
-              <div class="panel-title"><h2>Inventory Status</h2></div>
-              <div class="donut"></div>
-              <div class="legend">
-                <span><i class="green-dot"></i>In Stock <b>80%</b></span
-                ><span><i class="yellow-dot"></i>Low Stock <b>15%</b></span
-                ><span><i class="red-dot"></i>Out of Stock <b>5%</b></span>
-              </div>
+              <div class="panel-title"><div><h2>Inventory health</h2><small>Current stock status</small></div><Warehouse :size="20" class="muted-icon" /></div>
+              <div class="donut data-donut" :style="{ background: `conic-gradient(#18a873 0 ${reportInventory.length ? reportInventoryStatus.healthy / reportInventory.length * 100 : 0}%, #f6bd4f ${reportInventory.length ? reportInventoryStatus.healthy / reportInventory.length * 100 : 0}% ${reportInventory.length ? (reportInventoryStatus.healthy + reportInventoryStatus.low) / reportInventory.length * 100 : 0}%, #e5484d ${reportInventory.length ? (reportInventoryStatus.healthy + reportInventoryStatus.low) / reportInventory.length * 100 : 0}% 100%)` }"></div>
+              <div class="legend"><span><i class="green-dot"></i>Healthy <b>{{ reportInventoryStatus.healthy }}</b></span><span><i class="yellow-dot"></i>Low stock <b>{{ reportInventoryStatus.low }}</b></span><span><i class="red-dot"></i>Out of stock <b>{{ reportInventoryStatus.out }}</b></span></div>
             </section>
           </div>
+          <div class="report-columns">
+            <section class="white-panel report-table-panel"><div class="panel-title"><h2>Low-stock alerts</h2><span class="status low-stock">{{ reportLowStock.length }} items</span></div><div v-if="reportLowStock.length" class="report-list"><div v-for="item in reportLowStock.slice(0, 6)" :key="item.id"><span class="product-thumb"><img v-if="item.image_data" :src="item.image_data" :alt="item.name" /><Bike v-else :size="18" /></span><div><b>{{ item.name }}</b><small>{{ item.stock_on_hand }} units remaining · reorder at {{ item.reorder_level }}</small></div><strong :class="item.out_of_stock ? 'status out-of-stock' : 'status low-stock'">{{ item.out_of_stock ? "Out" : "Low" }}</strong></div></div><div v-else class="empty-state"><b>Inventory is healthy</b><small>No low-stock items need attention.</small></div></section>
+            <section class="white-panel report-table-panel"><div class="panel-title"><h2>Recent stock activity</h2><span class="text-button">{{ reportMovements.length }} records</span></div><div class="report-list"><div v-for="movement in reportMovements.slice(0, 6)" :key="movement.id"><span class="movement-type" :class="movement.type"><ArrowUpFromLine v-if="movement.type === 'stock_in'" :size="16" /><ArrowDownToLine v-else :size="16" /></span><div><b>{{ movement.product?.name }}</b><small>{{ movement.type.replace('_', ' ') }} · {{ movement.quantity }} units</small></div><span>{{ formatReportDate(movement.created_at.slice(0, 10)) }}</span></div><div v-if="!reportMovements.length" class="empty-state"><b>No movement records</b><small>Stock activity will appear here.</small></div></div></section>
+          </div>
+          <section class="white-panel report-table-panel full-report-table"><div class="panel-title"><div><h2>Transaction history</h2><small>Filtered sales records</small></div><button class="text-button" @click="navigate('/sales')">Open sales</button></div><div class="data-table transaction-table"><div class="data-head"><span>Date</span><span>Transaction #</span><span>Items</span><span>Total</span><span>Payment</span></div><div v-for="sale in reportSales.slice(0, 10)" :key="sale.id" class="data-row"><span>{{ new Date(`${sale.sold_at}Z`).toLocaleDateString("en-PH") }}</span><button class="link-button" @click="viewSale({ ...sale, id: sale.transaction_number })">{{ sale.transaction_number }}</button><span>{{ sale.items?.reduce((sum, item) => sum + item.quantity, 0) || 0 }}</span><b>{{ money(sale.total_amount) }}</b><span>{{ sale.payment_method }}</span></div></div><div v-if="!reportSales.length" class="empty-state"><b>No transactions found</b><small>Sales matching your selected dates will appear here.</small></div></section>
         </section>
 
-        <section v-else-if="route.path === '/users'" class="page-view">
+        <section v-else-if="route.path === '/users'" class="page-view admin-page">
+          <div class="admin-hero">
+            <div><span class="eyebrow">Administration</span><h2>Team &amp; access</h2><p>Keep your operations secure, organized, and ready to scale.</p></div>
+            <span class="admin-hero-icon"><Users :size="30" /></span>
+          </div>
+          <div class="admin-stats">
+            <article class="admin-stat"><span class="metric-icon blue"><Users :size="19" /></span><div><small>Total team members</small><strong>{{ staffStats.total }}</strong></div></article>
+            <article class="admin-stat"><span class="metric-icon green"><CircleDollarSign :size="19" /></span><div><small>Active accounts</small><strong>{{ staffStats.active }}</strong></div></article>
+            <article class="admin-stat"><span class="metric-icon yellow"><Settings2 :size="19" /></span><div><small>Administrators</small><strong>{{ staffStats.admins }}</strong></div></article>
+          </div>
           <div class="white-panel table-panel">
             <div class="toolbar">
               <label class="search-field"
@@ -1005,6 +1115,10 @@ async function logout() {
                   <option v-for="supplier in suppliers.filter((item) => item.is_active)" :key="supplier.id" :value="supplier.id">{{ supplier.name }}</option>
                 </select></label
               ><label>Quantity<input v-model.number="stockForm.quantity" type="number" min="1" /></label
+              ><div v-if="selectedStockProduct" class="selected-product">
+                <span class="product-thumb"><img v-if="selectedStockProduct.image_data" :src="selectedStockProduct.image_data" :alt="selectedStockProduct.name" /><Bike v-else :size="22" /></span>
+                <div><b>{{ selectedStockProduct.name }}</b><small>{{ selectedStockProduct.sku }} · {{ selectedStockProduct.quantity }} currently in stock</small></div>
+              </div>
               ><label v-if="route.path === '/adjust-stock'"
                 >Adjustment Type*<select>
                   <option>Damage / Loss</option>
@@ -1040,6 +1154,7 @@ async function logout() {
               </p>
               <div class="movement-list">
                 <div v-for="movement in stockMovements.slice(0, 5)" :key="movement.id">
+                  <span class="movement-product-thumb product-thumb"><img v-if="movement.product?.image_data" :src="movement.product.image_data" :alt="movement.product.name" /><Bike v-else :size="18" /></span>
                   <b>{{ movement.product?.name }}</b>
                   <span>{{ movement.type }}: {{ movement.quantity }} unit(s)</span>
                 </div>
@@ -1122,6 +1237,12 @@ async function logout() {
         <X :size="18" />
       </button>
       <h2>{{ editingProductId ? "Edit Product" : "Add Product" }}</h2>
+      <div class="image-upload">
+        <span class="product-preview product-thumb large"><img v-if="newProduct.image_data" :src="newProduct.image_data" alt="Selected product" /><Bike v-else :size="32" /></span>
+        <div><b>Product picture</b><small>JPG, PNG, WEBP, or GIF · max 5 MB</small>
+          <label class="upload-button"><Upload :size="16" /> Choose image<input type="file" accept="image/jpeg,image/png,image/webp,image/gif" @change="uploadProductImage" /></label>
+        </div>
+      </div>
       <label
         >Product name<input
           v-model="newProduct.name"

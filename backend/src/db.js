@@ -24,6 +24,7 @@ const schema = [
   `CREATE TABLE IF NOT EXISTS products (
     id INTEGER PRIMARY KEY AUTOINCREMENT, category_id INTEGER NOT NULL, sku TEXT NOT NULL UNIQUE,
     name TEXT NOT NULL, brand TEXT, barcode TEXT UNIQUE, description TEXT,
+    image_data TEXT,
     cost_price NUMERIC NOT NULL DEFAULT 0, price NUMERIC NOT NULL DEFAULT 0,
     quantity INTEGER NOT NULL DEFAULT 0, reorder_level INTEGER NOT NULL DEFAULT 0,
     is_active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -69,6 +70,8 @@ const schema = [
 ];
 
 for (const statement of schema) sqlite.exec(statement);
+if (!sqlite.prepare("PRAGMA table_info(products)").all().some((column) => column.name === "image_data"))
+  sqlite.exec("ALTER TABLE products ADD COLUMN image_data TEXT");
 
 function createDb(connection = sqlite) {
   return {

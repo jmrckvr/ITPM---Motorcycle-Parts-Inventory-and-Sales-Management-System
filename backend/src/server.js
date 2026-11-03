@@ -41,7 +41,7 @@ app.use(
     },
   }),
 );
-app.use(express.json());
+app.use(express.json({ limit: "10mb" }));
 
 app.get("/", (_request, response) =>
   response.json({ name: "MotoParts API", status: "ok" }),
@@ -472,6 +472,75 @@ api.get("/reports/inventory", async (_request, response) =>
       }))),
   }),
 );
+api.get("/reports/overview", async (request, response, next) => {
+  try {
+    const conditions = [];
+    const values = [];
+    if (request.query.from) {
+      conditions.push("date(sold_at) >= date(?)");
+      values.push(request.query.from);
+    }
+    if (request.query.to) {
+      conditions.push("date(sold_at) <= date(?)");
+      values.push(request.query.to);
+    }
+    if (request.user.role !== "admin") {
+      conditions.push("cashier_id = ?");
+      values.push(request.user.id);
+    }
+    const sales = await db.prepare(
+      `SELECT * FROM sales ${conditions.length ? `WHERE ${conditions.join(" AND ")}` : ""} ORDER BY sold_at DESC, id DESC`,
+    ).all(...values);
+    const movementConditions = [];
+    const movementValues = [];
+    if (request.query.from) {
+      movementConditions.push("date(created_at) >= date(?)");
+      movementValues.push(request.query.from);
+    }
+    if (request.query.to) {
+      movementConditions.push("date(created_at) <= date(?)");
+      movementValues.push(request.query.to);
+    }
+    const movements = await db.prepare(
+      `SELECT * FROM stock_movements ${movementConditions.length ? `WHERE ${movementConditions.join(" AND ")}` : ""} ORDER BY created_at DESC, id DESC LIMIT 200`,
+    ).all(...movementValues);
+    const inventory = await Promise.all(
+      (await db.prepare("SELECT * FROM products WHERE is_active = 1 ORDER BY quantity, id").all()).map(async (product) => ({
+        ...(await productView(product)),
+        stock_on_hand: product.quantity,
+        low_stock: product.quantity > 0 && product.quantity <= product.reorder_level ? 1 : 0,
+        out_of_stock: product.quantity === 0 ? 1 : 0,
+      })),
+    );
+    const dailySales = await db.prepare(
+      `SELECT date(sold_at) AS date, COUNT(*) AS transactions, COALESCE(SUM(total_amount), 0) AS total
+       FROM sales ${conditions.length ? `WHERE ${conditions.join(" AND ")}` : ""}
+       GROUP BY date(sold_at) ORDER BY date(sold_at)`,
+    ).all(...values);
+    const lowStock = inventory.filter((product) => product.low_stock || product.out_of_stock);
+    return response.json({
+      summary: {
+        total_sales: sales.reduce((sum, sale) => sum + Number(sale.total_amount || 0), 0),
+        transaction_count: sales.length,
+        total_paid: sales.reduce((sum, sale) => sum + Number(sale.payment_amount || 0), 0),
+        total_change: sales.reduce((sum, sale) => sum + Number(sale.change_amount || 0), 0),
+        products_tracked: inventory.length,
+        inventory_units: inventory.reduce((sum, product) => sum + Number(product.quantity || 0), 0),
+        low_stock_count: inventory.filter((product) => product.low_stock).length,
+        out_of_stock_count: inventory.filter((product) => product.out_of_stock).length,
+        stock_in_count: movements.filter((movement) => movement.type === "stock_in").length,
+        stock_out_count: movements.filter((movement) => movement.type === "stock_out").length,
+      },
+      daily_sales: dailySales,
+      inventory,
+      low_stock: lowStock,
+      movements: await Promise.all(movements.map(movementView)),
+      sales: await Promise.all(sales.map(saleView)),
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
 
 api.get("/users", requireAdmin, async (_request, response) =>
   response.json({
@@ -564,7 +633,7 @@ async function saveProduct(request, response, next, isUpdate) {
         .json({ message: "The selected category is invalid." });
     if (isUpdate)
       await db.prepare(
-        "UPDATE products SET category_id = ?, sku = ?, name = ?, brand = ?, barcode = ?, description = ?, cost_price = ?, price = ?, quantity = ?, reorder_level = ?, is_active = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+        "UPDATE products SET category_id = ?, sku = ?, name = ?, brand = ?, barcode = ?, description = ?, image_data = ?, cost_price = ?, price = ?, quantity = ?, reorder_level = ?, is_active = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
       ).run(
         value.category_id,
         value.sku,
@@ -572,6 +641,7 @@ async function saveProduct(request, response, next, isUpdate) {
         value.brand ?? null,
         value.barcode ?? null,
         value.description ?? null,
+        value.image_data ?? null,
         value.cost_price ?? 0,
         value.price,
         value.quantity,
@@ -581,7 +651,7 @@ async function saveProduct(request, response, next, isUpdate) {
       );
     else {
       const result = await db.prepare(
-          "INSERT INTO products (category_id, sku, name, brand, barcode, description, cost_price, price, quantity, reorder_level, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+          "INSERT INTO products (category_id, sku, name, brand, barcode, description, image_data, cost_price, price, quantity, reorder_level, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .run(
           value.category_id,
@@ -590,6 +660,7 @@ async function saveProduct(request, response, next, isUpdate) {
           value.brand ?? null,
           value.barcode ?? null,
           value.description ?? null,
+          value.image_data ?? null,
           value.cost_price ?? 0,
           value.price,
           value.quantity,

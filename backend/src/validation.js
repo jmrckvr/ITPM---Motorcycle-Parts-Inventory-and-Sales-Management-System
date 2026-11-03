@@ -16,6 +16,7 @@ export const productSchema = z.object({
   brand: z.string().max(120).nullable().optional(),
   barcode: z.string().max(120).nullable().optional(),
   description: z.string().nullable().optional(),
+  image_data: z.string().regex(/^data:image\/(?:jpeg|png|webp|gif);base64,[A-Za-z0-9+/=\s]+$/, "Upload a valid image file.").max(7000000).nullable().optional(),
   cost_price: z.coerce.number().min(0).default(0),
   price: z.coerce.number().min(0),
   quantity: z.coerce.number().int().min(0).optional().default(0),
