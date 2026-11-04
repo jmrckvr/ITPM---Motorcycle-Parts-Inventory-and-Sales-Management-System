@@ -123,8 +123,16 @@ api.get("/dashboard/summary", async (_request, response) => {
     SELECT COALESCE(SUM(total_amount), 0) AS todays_sales, COUNT(*) AS transaction_count
     FROM sales WHERE status = 'completed' AND DATE(sold_at) = DATE('now')
   `).get();
+  const dailySales = await db.prepare(`
+    SELECT DATE(sold_at) AS date, COUNT(*) AS transactions,
+      COALESCE(SUM(total_amount), 0) AS total
+    FROM sales
+    WHERE status = 'completed' AND DATE(sold_at) >= DATE('now', '-6 days')
+    GROUP BY DATE(sold_at)
+    ORDER BY DATE(sold_at)
+  `).all();
   const recent = await Promise.all((await db.prepare("SELECT * FROM sales ORDER BY sold_at DESC, id DESC LIMIT 5").all()).map(saleView));
-  return response.json({ data: { ...stats, ...sales, recent } });
+  return response.json({ data: { ...stats, ...sales, daily_sales: dailySales, recent } });
 });
 
 api.get("/categories", async (_request, response) =>
@@ -200,7 +208,7 @@ api.post("/products", requireAdmin, async (request, response, next) =>
   saveProduct(request, response, next, false),
 );
 api.get("/products/:id", async (request, response) => {
-  const product = await db.prepare("SELECT * FROM products WHERE id = ?")
+  const product = await db.prepare("SELECT * FROM products WHERE id = ? AND is_active = 1")
     .get(request.params.id);
   return product
     ? response.json({ data: await productView(product) })
@@ -259,7 +267,7 @@ api.delete("/suppliers/:id", requireAdmin, async (request, response) => {
 api.post("/stock-movements", async (request, response, next) => {
   try {
     const data = parse(stockInSchema, request.body);
-    const product = await db.prepare("SELECT * FROM products WHERE id = ?")
+    const product = await db.prepare("SELECT * FROM products WHERE id = ? AND is_active = 1")
       .get(data.product_id);
     if (!product)
       return response
@@ -352,7 +360,7 @@ api.post("/sales", async (request, response, next) => {
       for (const item of items)
         mergedItems.set(item.product_id, (mergedItems.get(item.product_id) || 0) + item.quantity);
       for (const [productId, quantity] of mergedItems) {
-        const product = await tx.prepare("SELECT * FROM products WHERE id = ?")
+        const product = await tx.prepare("SELECT * FROM products WHERE id = ? AND is_active = 1")
           .get(productId);
         if (!product) {
           const error = new Error("The selected product is invalid.");
@@ -591,7 +599,7 @@ app.use((error, _request, response, _next) => {
       message: "The submitted data conflicts with an existing record.",
     });
   return response.status(error.status || 500).json({
-    message: error.message || "Server error.",
+    message: error.status ? error.message : "Server error.",
     ...(error.details ? { errors: error.details } : {}),
   });
 });
@@ -742,9 +750,12 @@ async function saveUser(request, response, next, isUpdate) {
   }
 }
 
-app.listen(port, () =>
-  console.log(`MotoParts API listening on http://127.0.0.1:${port}`),
-);
+export { app };
+
+if (process.env.NODE_ENV !== "test")
+  app.listen(port, () =>
+    console.log(`MotoParts API listening on http://127.0.0.1:${port}`),
+  );
 
 async function createNotification({ userId = null, role = null, title, message, type = "info" }) {
   await db.prepare(

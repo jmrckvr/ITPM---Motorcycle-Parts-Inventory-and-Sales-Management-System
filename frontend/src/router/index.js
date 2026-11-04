@@ -9,6 +9,7 @@ const routes = [
   { path: "/users", name: "users", ...publicRoute, meta: { admin: true } },
   { path: "/profile", name: "profile", ...publicRoute },
   { path: "/users/:id/profile", name: "user-profile", ...publicRoute, meta: { admin: true } },
+  { path: "/:pathMatch(.*)*", redirect: "/" },
 ];
 const router = createRouter({ history: createWebHistory(), routes });
 router.beforeEach((to) => {

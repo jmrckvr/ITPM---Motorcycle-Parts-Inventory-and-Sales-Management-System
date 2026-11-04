@@ -62,6 +62,7 @@ const reportSales = ref([]);
 const reportMovements = ref([]);
 const reportDailySales = ref([]);
 const reportLowStock = ref([]);
+const dashboardSales = ref([]);
 const reportFrom = ref("");
 const reportTo = ref("");
 const reportCategory = ref("overview");
@@ -193,6 +194,23 @@ const reportInventoryStatus = computed(() => ({
 const reportChartMax = computed(() =>
   Math.max(...reportDailySales.value.map((item) => Number(item.total)), 1),
 );
+const dashboardChart = computed(() => {
+  const days = [];
+  const today = new Date();
+  for (let offset = 6; offset >= 0; offset -= 1) {
+    const date = new Date(today);
+    date.setDate(today.getDate() - offset);
+    const key = formatDateInput(date);
+    const sales = dashboardSales.value.find((item) => item.date === key);
+    days.push({
+      key,
+      label: date.toLocaleDateString("en-PH", { month: "short", day: "numeric" }),
+      total: Number(sales?.total || 0),
+    });
+  }
+  const max = Math.max(...days.map((day) => day.total), 1);
+  return days.map((day) => ({ ...day, height: Math.max((day.total / max) * 100, day.total ? 8 : 2) }));
+});
 
 onMounted(async () => {
   if (!isAuthenticated.value) return;
@@ -231,6 +249,7 @@ async function refreshData() {
       rawDate: sale.sold_at?.slice(0, 10) || "",
     }));
     dashboard.value = dashboardResponse.data.data;
+    dashboardSales.value = dashboardResponse.data.data.daily_sales || [];
     stockMovements.value = movementResponse.data.data || [];
     categories.value = categoryResponse.data.data || [];
     suppliers.value = supplierResponse.data.data || [];
@@ -247,6 +266,12 @@ async function refreshData() {
     await loadNotifications();
   } catch (error) {
     operationError.value = error.response?.data?.message || "Unable to load data.";
+    if (error.response?.status === 401) {
+      sessionStorage.clear();
+      authToken.value = null;
+      currentUser.value = null;
+      navigate("/login");
+    }
     await loadNotifications();
   } finally {
     loading.value = false;
@@ -564,14 +589,15 @@ function uploadProductImage(event) {
 }
 async function completeSale() {
   operationError.value = "";
-  if (!cart.value.length || (paymentMethod.value === "cash" && Number(cashReceived.value) < cartTotal.value)) {
+  const paymentAmount = paymentMethod.value === "cash" ? Number(cashReceived.value) : cartTotal.value;
+  if (!cart.value.length || paymentAmount < cartTotal.value) {
     operationError.value = "Enter enough payment to complete this sale.";
     return;
   }
   try {
     const { data } = await api.post("/sales", {
       items: cart.value.map((item) => ({ product_id: item.id, quantity: item.cartQuantity })),
-      payment_amount: Number(cashReceived.value),
+      payment_amount: paymentAmount,
       payment_method: paymentMethod.value,
     });
     lastReceipt.value = data.data;
@@ -784,15 +810,14 @@ async function logout() {
               </div>
               <div class="bar-chart">
                 <span
-                  v-for="height in [42, 51, 70, 58, 36, 77, 48]"
-                  :key="height"
-                  :style="{ height: `${height}%` }"
+                  v-for="day in dashboardChart"
+                  :key="day.key"
+                  :title="`${day.label}: ${money(day.total)}`"
+                  :style="{ height: `${day.height}%` }"
                 ></span>
               </div>
               <div class="chart-labels">
-                <span>Sep 15</span><span>Sep 16</span><span>Sep 17</span
-                ><span>Sep 18</span><span>Sep 19</span><span>Sep 20</span
-                ><span>Sep 21</span>
+                <span v-for="day in dashboardChart" :key="`${day.key}-label`">{{ day.label }}</span>
               </div>
             </section>
             <section class="white-panel">
