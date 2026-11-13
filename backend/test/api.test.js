@@ -1,14 +1,10 @@
 import { createServer } from "node:http";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import path from "node:path";
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 
-const temporaryDirectory = mkdtempSync(path.join(tmpdir(), "motoparts-api-"));
 process.env.NODE_ENV = "test";
 process.env.JWT_SECRET = "test-secret";
-process.env.DB_FILE = path.join(temporaryDirectory, "motoparts.sqlite");
+process.env.DB_NAME = "motoparts_test";
 
 const { app } = await import("../src/server.js");
 const { db } = await import("../src/db.js");
@@ -35,7 +31,6 @@ before(async () => {
 after(async () => {
   await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
   db.pool.close();
-  rmSync(temporaryDirectory, { recursive: true, force: true });
 });
 
 test("admin and staff workflows are authenticated and role restricted", async () => {
@@ -82,7 +77,7 @@ test("admin and staff workflows are authenticated and role restricted", async ()
     body: JSON.stringify({
       items: [{ product_id: productId, quantity: 2 }],
       payment_amount: 500,
-      payment_method: "card",
+      payment_method: "cash",
     }),
   });
   assert.equal(sale.status, 200);
@@ -110,4 +105,24 @@ test("admin and staff workflows are authenticated and role restricted", async ()
     headers: { Authorization: `Bearer ${staffLogin.body.token}` },
   });
   assert.equal(staffUsers.status, 403);
+  const staffStockIn = await request("/stock-movements", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${staffLogin.body.token}` },
+    body: JSON.stringify({ product_id: productId, quantity: 1 }),
+  });
+  assert.equal(staffStockIn.status, 403);
+  const staffReports = await request("/reports/overview", {
+    headers: { Authorization: `Bearer ${staffLogin.body.token}` },
+  });
+  assert.equal(staffReports.status, 403);
+  const unsupportedPayment = await request("/sales", {
+    method: "POST",
+    headers: adminHeaders,
+    body: JSON.stringify({
+      items: [{ product_id: productId, quantity: 1 }],
+      payment_amount: 250,
+      payment_method: "card",
+    }),
+  });
+  assert.equal(unsupportedPayment.status, 422);
 });

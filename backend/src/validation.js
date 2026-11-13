@@ -65,7 +65,7 @@ export const saleSchema = z.object({
     )
     .min(1),
     payment_amount: z.coerce.number().min(0),
-    payment_method: z.enum(["cash", "gcash", "card"]).default("cash"),
+    payment_method: z.literal("cash").default("cash"),
 });
 
 export function parse(schema, value) {

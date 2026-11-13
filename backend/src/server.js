@@ -121,15 +121,15 @@ api.get("/dashboard/summary", async (_request, response) => {
   `).get();
   const sales = await db.prepare(`
     SELECT COALESCE(SUM(total_amount), 0) AS todays_sales, COUNT(*) AS transaction_count
-    FROM sales WHERE status = 'completed' AND DATE(sold_at) = DATE('now')
+    FROM sales WHERE status = 'completed' AND DATE(sold_at) = CURDATE()
   `).get();
   const dailySales = await db.prepare(`
-    SELECT DATE(sold_at) AS date, COUNT(*) AS transactions,
+    SELECT DATE_FORMAT(sold_at, '%Y-%m-%d') AS date, COUNT(*) AS transactions,
       COALESCE(SUM(total_amount), 0) AS total
     FROM sales
-    WHERE status = 'completed' AND DATE(sold_at) >= DATE('now', '-6 days')
-    GROUP BY DATE(sold_at)
-    ORDER BY DATE(sold_at)
+    WHERE status = 'completed' AND DATE(sold_at) >= DATE_SUB(CURDATE(), INTERVAL 6 DAY)
+    GROUP BY DATE_FORMAT(sold_at, '%Y-%m-%d')
+    ORDER BY DATE_FORMAT(sold_at, '%Y-%m-%d')
   `).all();
   const recent = await Promise.all((await db.prepare("SELECT * FROM sales ORDER BY sold_at DESC, id DESC LIMIT 5").all()).map(saleView));
   return response.json({ data: { ...stats, ...sales, daily_sales: dailySales, recent } });
@@ -192,7 +192,10 @@ api.put("/categories/:id", requireAdmin, async (request, response, next) => {
   }
 });
 api.delete("/categories/:id", requireAdmin, async (request, response) => {
-  const result = await db.prepare("DELETE FROM categories WHERE id = ?")
+  const products = await db.prepare("SELECT COUNT(*) AS count FROM products WHERE category_id = ? AND is_active = 1").get(request.params.id);
+  if (Number(products.count) > 0)
+    return response.status(409).json({ message: "This category is used by active products. Reassign those products first." });
+  const result = await db.prepare("UPDATE categories SET is_active = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
     .run(request.params.id);
   if (!result.changes)
     return response.status(404).json({ message: "Category not found." });
@@ -264,7 +267,7 @@ api.delete("/suppliers/:id", requireAdmin, async (request, response) => {
   const result = await db.prepare("UPDATE suppliers SET is_active=0, updated_at=CURRENT_TIMESTAMP WHERE id=?").run(request.params.id);
   return result.changes ? response.json({ message: "Supplier archived successfully." }) : response.status(404).json({ message: "Supplier not found." });
 });
-api.post("/stock-movements", async (request, response, next) => {
+api.post("/stock-movements", requireAdmin, async (request, response, next) => {
   try {
     const data = parse(stockInSchema, request.body);
     const product = await db.prepare("SELECT * FROM products WHERE id = ? AND is_active = 1")
@@ -310,7 +313,7 @@ api.post("/stock-movements", async (request, response, next) => {
     return next(error);
   }
 });
-api.post("/stock-out", async (request, response, next) => {
+api.post("/stock-out", requireAdmin, async (request, response, next) => {
   try {
     const data = parse(stockAdjustmentSchema, request.body);
     const product = await db.prepare("SELECT * FROM products WHERE id = ? AND is_active = 1").get(data.product_id);
@@ -346,7 +349,7 @@ api.post("/stock-out", async (request, response, next) => {
 
 api.get("/sales", async (_request, response) =>
   response.json({
-    data: await Promise.all((await db.prepare("SELECT * FROM sales WHERE (? = 'admin' OR cashier_id = ?) ORDER BY sold_at DESC, id DESC").all(_request.user.role, _request.user.id)).map(saleView)),
+    data: await Promise.all((await db.prepare("SELECT * FROM sales WHERE status = 'completed' AND (? = 'admin' OR cashier_id = ?) ORDER BY sold_at DESC, id DESC").all(_request.user.role, _request.user.id)).map(saleView)),
   }),
 );
 api.post("/sales", async (request, response, next) => {
@@ -480,7 +483,7 @@ api.get("/reports/inventory", async (_request, response) =>
       }))),
   }),
 );
-api.get("/reports/overview", async (request, response, next) => {
+api.get("/reports/overview", requireAdmin, async (request, response, next) => {
   try {
     const conditions = [];
     const values = [];
@@ -521,9 +524,9 @@ api.get("/reports/overview", async (request, response, next) => {
       })),
     );
     const dailySales = await db.prepare(
-      `SELECT date(sold_at) AS date, COUNT(*) AS transactions, COALESCE(SUM(total_amount), 0) AS total
+      `SELECT DATE_FORMAT(sold_at, '%Y-%m-%d') AS date, COUNT(*) AS transactions, COALESCE(SUM(total_amount), 0) AS total
        FROM sales ${conditions.length ? `WHERE ${conditions.join(" AND ")}` : ""}
-       GROUP BY date(sold_at) ORDER BY date(sold_at)`,
+       GROUP BY DATE_FORMAT(sold_at, '%Y-%m-%d') ORDER BY DATE_FORMAT(sold_at, '%Y-%m-%d')`,
     ).all(...values);
     const lowStock = inventory.filter((product) => product.low_stock || product.out_of_stock);
     return response.json({
@@ -632,7 +635,7 @@ async function saveProduct(request, response, next, isUpdate) {
     if (isUpdate) value.quantity = current.quantity;
     if (
       !(await db
-        .prepare("SELECT id FROM categories WHERE id = ?")
+        .prepare("SELECT id FROM categories WHERE id = ? AND is_active = 1")
         .get(value.category_id)
       )
     )

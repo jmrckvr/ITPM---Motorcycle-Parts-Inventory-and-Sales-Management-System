@@ -1,88 +1,112 @@
 import "dotenv/config";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-import Database from "better-sqlite3";
+import mysql from "mysql2/promise";
 import bcrypt from "bcryptjs";
 
-const directory = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "data");
-const filename = process.env.DB_FILE || path.join(directory, "motoparts.sqlite");
-const sqlite = new Database(filename);
-sqlite.pragma("foreign_keys = ON");
+const host = process.env.DB_HOST || "127.0.0.1";
+const port = Number(process.env.DB_PORT || 3306);
+const user = process.env.DB_USER || "root";
+const password = process.env.DB_PASSWORD || "";
+const database = process.env.DB_NAME || "BS Tarluck";
+const quotedDatabase = `\`${database.replaceAll("`", "``")}\``;
+
+const serverConnection = await mysql.createConnection({ host, port, user, password, decimalNumbers: true });
+await serverConnection.query(`CREATE DATABASE IF NOT EXISTS ${quotedDatabase}`);
+await serverConnection.end();
+
+const pool = mysql.createPool({
+  host,
+  port,
+  user,
+  password,
+  database,
+  decimalNumbers: true,
+  waitForConnections: true,
+  connectionLimit: 10,
+});
 
 const schema = [
   `CREATE TABLE IF NOT EXISTS users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, email TEXT NOT NULL UNIQUE,
-    password TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'staff' CHECK (role IN ('admin','staff')),
-    is_active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    id INT PRIMARY KEY AUTO_INCREMENT, name VARCHAR(255) NOT NULL, email VARCHAR(255) NOT NULL UNIQUE,
+    password VARCHAR(255) NOT NULL, role ENUM('admin','staff') NOT NULL DEFAULT 'staff',
+    is_active TINYINT(1) NOT NULL DEFAULT 1, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
   )`,
   `CREATE TABLE IF NOT EXISTS categories (
-    id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, description TEXT,
-    is_active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    id INT PRIMARY KEY AUTO_INCREMENT, name VARCHAR(255) NOT NULL UNIQUE, description TEXT,
+    is_active TINYINT(1) NOT NULL DEFAULT 1, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
   )`,
   `CREATE TABLE IF NOT EXISTS products (
-    id INTEGER PRIMARY KEY AUTOINCREMENT, category_id INTEGER NOT NULL, sku TEXT NOT NULL UNIQUE,
-    name TEXT NOT NULL, brand TEXT, barcode TEXT UNIQUE, description TEXT,
-    image_data TEXT,
-    cost_price NUMERIC NOT NULL DEFAULT 0, price NUMERIC NOT NULL DEFAULT 0,
-    quantity INTEGER NOT NULL DEFAULT 0, reorder_level INTEGER NOT NULL DEFAULT 0,
-    is_active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    id INT PRIMARY KEY AUTO_INCREMENT, category_id INT NOT NULL, sku VARCHAR(255) NOT NULL UNIQUE,
+    name VARCHAR(255) NOT NULL, brand VARCHAR(255), barcode VARCHAR(255) UNIQUE, description TEXT,
+    image_data LONGTEXT, cost_price DECIMAL(12,2) NOT NULL DEFAULT 0, price DECIMAL(12,2) NOT NULL DEFAULT 0,
+    quantity INT NOT NULL DEFAULT 0, reorder_level INT NOT NULL DEFAULT 0,
+    is_active TINYINT(1) NOT NULL DEFAULT 1, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     FOREIGN KEY (category_id) REFERENCES categories(id) ON DELETE CASCADE
   )`,
   `CREATE TABLE IF NOT EXISTS suppliers (
-    id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, contact_person TEXT,
-    phone TEXT, email TEXT, address TEXT, is_active INTEGER NOT NULL DEFAULT 1,
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    id INT PRIMARY KEY AUTO_INCREMENT, name VARCHAR(255) NOT NULL UNIQUE, contact_person VARCHAR(255),
+    phone VARCHAR(100), email VARCHAR(255), address TEXT, is_active TINYINT(1) NOT NULL DEFAULT 1,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+      ON UPDATE CURRENT_TIMESTAMP
   )`,
   `CREATE TABLE IF NOT EXISTS sales (
-    id INTEGER PRIMARY KEY AUTOINCREMENT, cashier_id INTEGER NOT NULL, transaction_number TEXT NOT NULL UNIQUE,
-    total_amount NUMERIC NOT NULL, payment_amount NUMERIC NOT NULL DEFAULT 0,
-    change_amount NUMERIC NOT NULL DEFAULT 0, payment_method TEXT NOT NULL DEFAULT 'cash',
-    status TEXT NOT NULL DEFAULT 'completed', sold_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    id INT PRIMARY KEY AUTO_INCREMENT, cashier_id INT NOT NULL, transaction_number VARCHAR(255) NOT NULL UNIQUE,
+    total_amount DECIMAL(12,2) NOT NULL, payment_amount DECIMAL(12,2) NOT NULL DEFAULT 0,
+    change_amount DECIMAL(12,2) NOT NULL DEFAULT 0, payment_method VARCHAR(50) NOT NULL DEFAULT 'cash',
+    status VARCHAR(50) NOT NULL DEFAULT 'completed', sold_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (cashier_id) REFERENCES users(id)
   )`,
   `CREATE TABLE IF NOT EXISTS sale_items (
-    id INTEGER PRIMARY KEY AUTOINCREMENT, sale_id INTEGER NOT NULL, product_id INTEGER NOT NULL,
-    quantity INTEGER NOT NULL, unit_price NUMERIC NOT NULL, line_total NUMERIC NOT NULL,
+    id INT PRIMARY KEY AUTO_INCREMENT, sale_id INT NOT NULL, product_id INT NOT NULL,
+    quantity INT NOT NULL, unit_price DECIMAL(12,2) NOT NULL, line_total DECIMAL(12,2) NOT NULL,
     FOREIGN KEY (sale_id) REFERENCES sales(id) ON DELETE CASCADE,
     FOREIGN KEY (product_id) REFERENCES products(id)
   )`,
   `CREATE TABLE IF NOT EXISTS stock_movements (
-    id INTEGER PRIMARY KEY AUTOINCREMENT, product_id INTEGER NOT NULL, supplier_id INTEGER,
-    user_id INTEGER NOT NULL, type TEXT NOT NULL CHECK (type IN ('stock_in','stock_out','sale')),
-    quantity INTEGER NOT NULL, quantity_after INTEGER NOT NULL, reference TEXT, notes TEXT,
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    id INT PRIMARY KEY AUTO_INCREMENT, product_id INT NOT NULL, supplier_id INT,
+    user_id INT NOT NULL, type ENUM('stock_in','stock_out','sale') NOT NULL,
+    quantity INT NOT NULL, quantity_after INT NOT NULL, reference VARCHAR(255), notes TEXT,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (product_id) REFERENCES products(id), FOREIGN KEY (supplier_id) REFERENCES suppliers(id),
     FOREIGN KEY (user_id) REFERENCES users(id)
   )`,
   `CREATE TABLE IF NOT EXISTS notifications (
-    id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, role TEXT,
-    title TEXT NOT NULL, message TEXT NOT NULL, type TEXT NOT NULL DEFAULT 'info',
-    is_read INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    id INT PRIMARY KEY AUTO_INCREMENT, user_id INT, role VARCHAR(50),
+    title VARCHAR(255) NOT NULL, message TEXT NOT NULL, type VARCHAR(50) NOT NULL DEFAULT 'info',
+    is_read TINYINT(1) NOT NULL DEFAULT 0, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
   )`,
-  "CREATE INDEX IF NOT EXISTS idx_products_name ON products(name)",
-  "CREATE INDEX IF NOT EXISTS idx_products_quantity ON products(quantity)",
-  "CREATE INDEX IF NOT EXISTS idx_sales_sold_at ON sales(sold_at)",
-  "CREATE INDEX IF NOT EXISTS idx_stock_movements_created_at ON stock_movements(created_at)",
+  "CREATE INDEX idx_products_name ON products(name)",
+  "CREATE INDEX idx_products_quantity ON products(quantity)",
+  "CREATE INDEX idx_sales_sold_at ON sales(sold_at)",
+  "CREATE INDEX idx_stock_movements_created_at ON stock_movements(created_at)",
 ];
 
-for (const statement of schema) sqlite.exec(statement);
-if (!sqlite.prepare("PRAGMA table_info(products)").all().some((column) => column.name === "image_data"))
-  sqlite.exec("ALTER TABLE products ADD COLUMN image_data TEXT");
+for (const statement of schema) {
+  try {
+    await pool.query(statement);
+  } catch (error) {
+    if (!error.message.includes("Duplicate key name")) throw error;
+  }
+}
 
-function createDb(connection = sqlite) {
+function createDb(connection = pool) {
   return {
     prepare(sql) {
-      const statement = connection.prepare(sql);
       return {
-        get: async (...params) => statement.get(...params),
-        all: async (...params) => statement.all(...params),
-        run: async (...params) => {
-          const result = statement.run(...params);
-          return { changes: result.changes, lastInsertRowid: result.lastInsertRowid };
+        async get(...params) {
+          const [rows] = await connection.query(sql, params);
+          return rows[0];
+        },
+        async all(...params) {
+          const [rows] = await connection.query(sql, params);
+          return rows;
+        },
+        async run(...params) {
+          const [result] = await connection.query(sql, params);
+          return { changes: result.affectedRows, lastInsertRowid: result.insertId };
         },
       };
     },
@@ -91,36 +115,39 @@ function createDb(connection = sqlite) {
 
 export const db = {
   ...createDb(),
-  pool: sqlite,
+  pool: { close: () => pool.end(), end: () => pool.end() },
   async transaction(callback) {
-    sqlite.exec("BEGIN");
+    const connection = await pool.getConnection();
     try {
-      const value = await callback(createDb());
-      sqlite.exec("COMMIT");
+      await connection.beginTransaction();
+      const value = await callback(createDb(connection));
+      await connection.commit();
       return value;
     } catch (error) {
-      sqlite.exec("ROLLBACK");
+      await connection.rollback();
       throw error;
+    } finally {
+      connection.release();
     }
   },
 };
 
 async function initialize() {
-  await db.prepare("INSERT OR IGNORE INTO users (name,email,password,role) VALUES (?,?,?,?)").run(
+  await db.prepare("INSERT IGNORE INTO users (name,email,password,role) VALUES (?,?,?,?)").run(
     "Alex Dela Cruz", "admin@motoparts.test", await bcrypt.hash("password123", 10), "admin",
   );
-  await db.prepare("INSERT OR IGNORE INTO users (name,email,password,role) VALUES (?,?,?,?)").run(
+  await db.prepare("INSERT IGNORE INTO users (name,email,password,role) VALUES (?,?,?,?)").run(
     "Maria Santos", "staff@motoparts.test", await bcrypt.hash("password123", 10), "staff",
   );
   for (const name of ["Engine Parts", "Brake Parts", "Electrical", "Tires", "Accessories"]) {
-    await db.prepare("INSERT OR IGNORE INTO categories (name,description) VALUES (?,?)").run(
+    await db.prepare("INSERT IGNORE INTO categories (name,description) VALUES (?,?)").run(
       name, `${name} motorcycle parts`,
     );
   }
-  await db.prepare("INSERT OR IGNORE INTO suppliers (name,contact_person,phone) VALUES (?,?,?)").run(
+  await db.prepare("INSERT IGNORE INTO suppliers (name,contact_person,phone) VALUES (?,?,?)").run(
     "ABC Parts", "Purchasing Desk", "09170000001",
   );
-  await db.prepare("INSERT OR IGNORE INTO suppliers (name,contact_person,phone) VALUES (?,?,?)").run(
+  await db.prepare("INSERT IGNORE INTO suppliers (name,contact_person,phone) VALUES (?,?,?)").run(
     "MotoSupplies", "Supplier Desk", "09170000002",
   );
 }

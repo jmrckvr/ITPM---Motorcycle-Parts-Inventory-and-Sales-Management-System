@@ -316,6 +316,9 @@ a {
 .sidebar {
   width: 174px;
   min-height: 100vh;
+  position: sticky;
+  top: 0;
+  height: 100vh;
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
@@ -546,7 +549,8 @@ a {
   border-bottom: 1px solid #aeb8c4;
 }
 .bar-chart span {
-  width: 27px;
+  flex: 1 1 0;
+  min-width: 4px;
   max-height: 100%;
   border-radius: 3px 3px 0 0;
   background: #0b6be0;

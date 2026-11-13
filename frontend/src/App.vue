@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import {
   AlertTriangle,
@@ -41,6 +41,8 @@ const authLoading = ref(false);
 const authError = ref("");
 const currentUser = ref(readStoredUser());
 const authToken = ref(sessionStorage.getItem("auth_token"));
+const currentDate = ref(new Date());
+let dateRefreshTimer;
 const authForm = ref({
   email: "admin@motoparts.test",
   password: "password123",
@@ -102,7 +104,7 @@ const newProduct = ref({
   name: "",
   sku: "",
   brand: "",
-  category: "Engine Parts",
+  category_id: "",
   price: 0,
   cost_price: 0,
   quantity: 0,
@@ -196,7 +198,7 @@ const reportChartMax = computed(() =>
 );
 const dashboardChart = computed(() => {
   const days = [];
-  const today = new Date();
+  const today = new Date(currentDate.value);
   for (let offset = 6; offset >= 0; offset -= 1) {
     const date = new Date(today);
     date.setDate(today.getDate() - offset);
@@ -213,10 +215,17 @@ const dashboardChart = computed(() => {
 });
 
 onMounted(async () => {
+  dateRefreshTimer = window.setInterval(() => {
+    const previousDate = formatDateInput(currentDate.value);
+    currentDate.value = new Date();
+    if (previousDate !== formatDateInput(currentDate.value) && isAuthenticated.value)
+      refreshData();
+  }, 60000);
   if (!isAuthenticated.value) return;
   if (route.path === "/profile") viewedProfile.value = currentUser.value;
   await refreshData();
 });
+onUnmounted(() => window.clearInterval(dateRefreshTimer));
 async function refreshData() {
   loading.value = true;
   operationError.value = "";
@@ -238,7 +247,7 @@ async function refreshData() {
       ...sale,
       saleId: sale.id,
       id: sale.transaction_number,
-      date: new Date(`${sale.sold_at}Z`).toLocaleDateString("en-PH", {
+      date: parseApiDate(sale.sold_at).toLocaleDateString("en-PH", {
         year: "numeric",
         month: "long",
         day: "numeric",
@@ -305,7 +314,16 @@ function setReportRange(days) {
   loadReport();
 }
 function formatDateInput(value) {
-  return value.toISOString().slice(0, 10);
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, "0");
+  const day = String(value.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+function parseApiDate(value) {
+  if (!value) return new Date(NaN);
+  if (typeof value === "string" && value.includes(" ") && !value.includes("T"))
+    return new Date(`${value.replace(" ", "T")}Z`);
+  return new Date(value);
 }
 function formatReportDate(value) {
   return new Date(`${value}T00:00:00`).toLocaleDateString("en-PH", { month: "short", day: "numeric" });
@@ -512,11 +530,9 @@ async function submitProduct() {
   operationMessage.value = "";
   try {
     const isEditing = Boolean(editingProductId.value);
-    const categories = await api.get("/categories");
-    const category = categories.data.data.find((item) => item.name === newProduct.value.category);
     const payload = {
       ...newProduct.value,
-      category_id: category?.id,
+      category_id: Number(newProduct.value.category_id),
       reorder_level: Number(newProduct.value.reorder_level || 0),
       cost_price: Number(newProduct.value.cost_price || 0),
       barcode: newProduct.value.barcode || null,
@@ -529,7 +545,7 @@ async function submitProduct() {
       : await api.post("/products", payload);
     const saved = {
       ...data.data,
-      category: data.data.category?.name || newProduct.value.category,
+      category_id: data.data.category?.id || newProduct.value.category_id,
       brand: data.data.brand || "Motorcycle",
     };
     if (editingProductId.value) {
@@ -550,7 +566,7 @@ function editProduct(product) {
     name: product.name,
     sku: product.sku,
     brand: product.brand || "",
-    category: product.category?.name || product.category || "Engine Parts",
+    category_id: product.category?.id || product.category_id || "",
     price: product.price,
     cost_price: product.cost_price || 0,
     quantity: product.quantity,
@@ -562,7 +578,7 @@ function editProduct(product) {
   showProductModal.value = true;
 }
 function emptyProduct() {
-  return { name: "", sku: "", brand: "", category: "Engine Parts", price: 0, cost_price: 0, quantity: 0, reorder_level: 0, barcode: "", description: "", image_data: "" };
+  return { name: "", sku: "", brand: "", category_id: categories.value[0]?.id || "", price: 0, cost_price: 0, quantity: 0, reorder_level: 0, barcode: "", description: "", image_data: "" };
 }
 function uploadProductImage(event) {
   const file = event.target.files?.[0];
@@ -804,9 +820,6 @@ async function logout() {
             <section class="white-panel chart-panel">
               <div class="panel-title">
                 <h2>Sales Overview</h2>
-                <select>
-                  <option>Last 7 Days</option>
-                </select>
               </div>
               <div class="bar-chart">
                 <span
@@ -871,11 +884,7 @@ async function logout() {
                   placeholder="Search product..." /></label
               ><select v-model="selectedCategory">
                 <option>All categories</option>
-                <option>Engine Parts</option>
-                <option>Brake Parts</option>
-                <option>Electrical</option>
-                <option>Tires</option>
-                <option>Accessories</option></select
+                <option v-for="category in categories" :key="category.id">{{ category.name }}</option></select
               ><select v-model="selectedStatus">
                 <option>All status</option>
                 <option>In Stock</option>
@@ -959,7 +968,6 @@ async function logout() {
           <aside class="cart-panel white-panel">
             <div class="panel-title">
               <h2>Current Sale ({{ cart.length }})</h2>
-              <button class="text-button">View All</button>
             </div>
             <div v-for="item in cart" :key="item.id" class="cart-item">
               <span class="product-thumb"><img v-if="item.image_data" :src="item.image_data" :alt="item.name" /><Bike v-else :size="22" /></span>
@@ -978,7 +986,7 @@ async function logout() {
               <div>
                 <b>Total</b><strong>{{ money(cartTotal) }}</strong>
               </div>
-              <label>Payment method<select v-model="paymentMethod"><option value="cash">Cash</option><option value="gcash">GCash</option><option value="card">Card</option></select></label>
+              <label>Payment method<select v-model="paymentMethod" disabled><option value="cash">Cash</option></select></label>
               <label v-if="paymentMethod === 'cash'">Cash received<input v-model.number="cashReceived" type="number" min="0" /></label>
               <p v-if="paymentMethod === 'cash' && cashReceived >= cartTotal">Change: <b>{{ money(cashReceived - cartTotal) }}</b></p>
               <p v-if="operationError" class="auth-error">{{ operationError }}</p>
@@ -1057,7 +1065,7 @@ async function logout() {
             <section class="white-panel report-table-panel"><div class="panel-title"><h2>Low-stock alerts</h2><span class="status low-stock">{{ reportLowStock.length }} items</span></div><div v-if="reportLowStock.length" class="report-list"><div v-for="item in reportLowStock.slice(0, 6)" :key="item.id"><span class="product-thumb"><img v-if="item.image_data" :src="item.image_data" :alt="item.name" /><Bike v-else :size="18" /></span><div><b>{{ item.name }}</b><small>{{ item.stock_on_hand }} units remaining · reorder at {{ item.reorder_level }}</small></div><strong :class="item.out_of_stock ? 'status out-of-stock' : 'status low-stock'">{{ item.out_of_stock ? "Out" : "Low" }}</strong></div></div><div v-else class="empty-state"><b>Inventory is healthy</b><small>No low-stock items need attention.</small></div></section>
             <section class="white-panel report-table-panel"><div class="panel-title"><h2>Recent stock activity</h2><span class="text-button">{{ reportMovements.length }} records</span></div><div class="report-list"><div v-for="movement in reportMovements.slice(0, 6)" :key="movement.id"><span class="movement-type" :class="movement.type"><ArrowUpFromLine v-if="movement.type === 'stock_in'" :size="16" /><ArrowDownToLine v-else :size="16" /></span><div><b>{{ movement.product?.name }}</b><small>{{ movement.type.replace('_', ' ') }} · {{ movement.quantity }} units</small></div><span>{{ formatReportDate(movement.created_at.slice(0, 10)) }}</span></div><div v-if="!reportMovements.length" class="empty-state"><b>No movement records</b><small>Stock activity will appear here.</small></div></div></section>
           </div>
-          <section class="white-panel report-table-panel full-report-table"><div class="panel-title"><div><h2>Transaction history</h2><small>Filtered sales records</small></div><button class="text-button" @click="navigate('/sales')">Open sales</button></div><div class="data-table transaction-table"><div class="data-head"><span>Date</span><span>Transaction #</span><span>Items</span><span>Total</span><span>Payment</span></div><div v-for="sale in reportSales.slice(0, 10)" :key="sale.id" class="data-row"><span>{{ new Date(`${sale.sold_at}Z`).toLocaleDateString("en-PH") }}</span><button class="link-button" @click="viewSale({ ...sale, id: sale.transaction_number })">{{ sale.transaction_number }}</button><span>{{ sale.items?.reduce((sum, item) => sum + item.quantity, 0) || 0 }}</span><b>{{ money(sale.total_amount) }}</b><span>{{ sale.payment_method }}</span></div></div><div v-if="!reportSales.length" class="empty-state"><b>No transactions found</b><small>Sales matching your selected dates will appear here.</small></div></section>
+          <section class="white-panel report-table-panel full-report-table"><div class="panel-title"><div><h2>Transaction history</h2><small>Filtered sales records</small></div><button class="text-button" @click="navigate('/sales')">Open sales</button></div><div class="data-table transaction-table"><div class="data-head"><span>Date</span><span>Transaction #</span><span>Items</span><span>Total</span><span>Payment</span></div><div v-for="sale in reportSales.slice(0, 10)" :key="sale.id" class="data-row"><span>{{ parseApiDate(sale.sold_at).toLocaleDateString("en-PH") }}</span><button class="link-button" @click="viewSale({ ...sale, id: sale.transaction_number })">{{ sale.transaction_number }}</button><span>{{ sale.items?.reduce((sum, item) => sum + item.quantity, 0) || 0 }}</span><b>{{ money(sale.total_amount) }}</b><span>{{ sale.payment_method }}</span></div></div><div v-if="!reportSales.length" class="empty-state"><b>No transactions found</b><small>Sales matching your selected dates will appear here.</small></div></section>
         </section>
 
         <section v-else-if="route.path === '/users'" class="page-view admin-page">
@@ -1208,7 +1216,7 @@ async function logout() {
                 <div><dt>Full name</dt><dd>{{ viewedProfile?.name || currentUser?.name }}</dd></div>
                 <div><dt>Email address</dt><dd>{{ viewedProfile?.email || currentUser?.email }}</dd></div>
                 <div><dt>Role</dt><dd>{{ viewedProfile?.role === "admin" ? "Administrator" : "Staff" }}</dd></div>
-                <div><dt>Account created</dt><dd>{{ viewedProfile?.created_at ? new Date(`${viewedProfile.created_at}Z`).toLocaleDateString() : "—" }}</dd></div>
+                <div><dt>Account created</dt><dd>{{ viewedProfile?.created_at ? parseApiDate(viewedProfile.created_at).toLocaleDateString() : "—" }}</dd></div>
               </dl>
               <p v-if="operationError" class="auth-error">{{ operationError }}</p>
             </section>
@@ -1242,7 +1250,7 @@ async function logout() {
               <div>
                 <b>{{ notification.title }}</b><small>{{ notification.message }}</small>
               </div>
-              <span>{{ new Date(`${notification.created_at}Z`).toLocaleString() }}</span><button class="notification-delete" title="Delete notification" @click.stop="deleteNotification(notification)"><Trash2 :size="15" /></button>
+              <span>{{ parseApiDate(notification.created_at).toLocaleString() }}</span><button class="notification-delete" title="Delete notification" @click.stop="deleteNotification(notification)"><Trash2 :size="15" /></button>
             </div>
             <p v-if="operationError" class="auth-error">{{ operationError }}</p>
             <p v-if="!notifications.length">No notifications yet.</p>
@@ -1277,8 +1285,9 @@ async function logout() {
       ><label
         >Brand<input v-model="newProduct.brand" placeholder="e.g. Honda" /></label
       ><label
-        >Category<select v-model="newProduct.category">
-          <option v-for="category in categories" :key="category.id">{{ category.name }}</option>
+        >Category<select v-model="newProduct.category_id" required>
+          <option value="" disabled>Select category...</option>
+          <option v-for="category in categories.filter((item) => item.is_active)" :key="category.id" :value="category.id">{{ category.name }}</option>
         </select></label
       >
       <div class="modal-grid">

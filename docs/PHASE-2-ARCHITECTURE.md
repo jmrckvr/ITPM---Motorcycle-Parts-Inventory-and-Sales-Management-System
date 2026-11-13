@@ -2,14 +2,13 @@
 
 ## Recommended architecture
 
-A two-application monorepo keeps the Vue client and Node.js REST API independently testable with a local SQLite database.
+A two-application monorepo keeps the Vue client and Node.js REST API independently testable with a MySQL/MariaDB database.
 
 - `frontend`: Vue 3 + Vite single-page application, Tailwind CSS, Vue Router, Axios, Chart.js.
-- `backend`: Node.js REST API, JWT bearer authentication, SQLite schema initialization, Zod validation, and Express middleware.
+- `backend`: Node.js REST API, JWT bearer authentication, MySQL schema initialization, Zod validation, and Express middleware.
 - `docs`: scope, ERD, wireframes, test plans, revisions, and user guide.
-- `backend/data`: generated SQLite database files are local runtime data and are ignored by Git.
 
-Request flow: Vue page -> Axios API client -> Express route -> validation and auth middleware -> SQLite service -> JSON response.
+Request flow: Vue page -> Axios API client -> Express route -> validation and auth middleware -> MySQL service -> JSON response.
 
 ## Folder structure
 
@@ -33,7 +32,6 @@ Request flow: Vue page -> Axios API client -> Express route -> validation and au
 |   |-- src/server.js
 |   |-- src/db.js
 |   |-- src/auth.js, validation.js
-|   |-- data/                      # generated SQLite database
 |   |-- package.json
 |   `-- .env.example
 |-- docs/
@@ -126,7 +124,7 @@ Reusable components: `AppShell`, `Sidebar`, `Topbar`, `StatCard`, `DataTable`, `
 - `GET|POST|PUT|DELETE /api/users` (admin only)
 - `GET /api/reports/sales`, `GET /api/reports/inventory`
 
-Validation belongs in Zod schemas, authorization in Express middleware, and multi-table inventory/sale updates execute inside SQLite transactions.
+Validation belongs in Zod schemas, authorization in Express middleware, and multi-table inventory/sale updates execute inside MySQL transactions.
 
 ## Authentication and roles
 
@@ -146,7 +144,7 @@ Passwords are hashed with bcrypt. No passwords or tokens are logged or committed
 - [x] Initialize monorepo folder structure and architecture notes.
 - [x] Create initial database/ERD design.
 - [x] Create responsive login/navigation/dashboard/POS/inventory wireframe prototype.
-- [x] Add SQLite schema, models, seed accounts, and role middleware.
+- [x] Add MySQL schema, models, seed accounts, and role middleware.
 - [x] Connect the login prototype to the Node.js JWT API.
 - [x] Initialize the local database and validate the inventory and sales workflow.
 
@@ -165,4 +163,4 @@ Copy-Item .env.example .env
 npm run dev
 ```
 
-The frontend already defaults to `VITE_API_BASE_URL=http://127.0.0.1:8000/api`. Copy `backend/.env.example` to `backend/.env` to customize the port, JWT secret, SQLite file, or frontend origin.
+The frontend already defaults to `VITE_API_BASE_URL=http://127.0.0.1:8000/api`. Copy `backend/.env.example` to `backend/.env` to customize the port, JWT secret, MySQL connection, or frontend origin.
