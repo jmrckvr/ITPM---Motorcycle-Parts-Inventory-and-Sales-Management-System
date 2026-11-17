@@ -93,13 +93,25 @@ api.patch("/notifications/:id/read", async (request, response) => {
     ? response.json({ message: "Notification marked as read." })
     : response.status(404).json({ message: "Notification not found." });
 });
+// Admins post announcements that every user (admin and staff) can read.
+api.post("/notifications", requireAdmin, async (request, response, next) => {
+  try {
+    const data = parse(notificationSchema, request.body);
+    await createNotification({ title: data.title, message: data.message, type: "announcement" });
+    return response.status(201).json({ message: "Announcement posted." });
+  } catch (error) {
+    return next(error);
+  }
+});
 api.delete("/notifications/:id", async (request, response) => {
+  // Announcements are shared by everyone, so only an admin may delete one.
   const result = await db.prepare(`
     DELETE FROM notifications
     WHERE id = ?
       AND (user_id = ? OR user_id IS NULL)
       AND (role = ? OR role IS NULL)
-  `).run(request.params.id, request.user.id, request.user.role);
+      AND (type <> 'announcement' OR ? = 'admin')
+  `).run(request.params.id, request.user.id, request.user.role, request.user.role);
   return result.changes
     ? response.json({ message: "Notification deleted successfully." })
     : response.status(404).json({ message: "Notification not found." });
@@ -132,7 +144,18 @@ api.get("/dashboard/summary", async (_request, response) => {
     ORDER BY DATE_FORMAT(sold_at, '%Y-%m-%d')
   `).all();
   const recent = await Promise.all((await db.prepare("SELECT * FROM sales ORDER BY sold_at DESC, id DESC LIMIT 5").all()).map(saleView));
-  return response.json({ data: { ...stats, ...sales, daily_sales: dailySales, recent } });
+  // Best sellers: units sold per product over the last 30 days.
+  const topProducts = await db.prepare(`
+    SELECT p.id, p.name, p.image_data, SUM(si.quantity) AS units, SUM(si.line_total) AS revenue
+    FROM sale_items si
+    JOIN sales s ON s.id = si.sale_id
+    JOIN products p ON p.id = si.product_id
+    WHERE s.status = 'completed' AND DATE(s.sold_at) >= DATE_SUB(CURDATE(), INTERVAL 29 DAY)
+    GROUP BY p.id, p.name, p.image_data
+    ORDER BY units DESC, revenue DESC
+    LIMIT 8
+  `).all();
+  return response.json({ data: { ...stats, ...sales, daily_sales: dailySales, recent, top_products: topProducts } });
 });
 
 api.get("/categories", async (_request, response) =>
@@ -529,12 +552,20 @@ api.get("/reports/overview", requireAdmin, async (request, response, next) => {
        GROUP BY DATE_FORMAT(sold_at, '%Y-%m-%d') ORDER BY DATE_FORMAT(sold_at, '%Y-%m-%d')`,
     ).all(...values);
     const lowStock = inventory.filter((product) => product.low_stock || product.out_of_stock);
+    // Gross profit = what we sold it for minus what it cost us (uses each product's current cost price).
+    const profitConditions = conditions.map((condition) => condition.replace(/sold_at/g, "s.sold_at").replace(/cashier_id/g, "s.cashier_id"));
+    const profit = await db.prepare(
+      `SELECT COALESCE(SUM(si.line_total - si.quantity * COALESCE(p.cost_price, 0)), 0) AS gross_profit
+       FROM sale_items si JOIN sales s ON s.id = si.sale_id JOIN products p ON p.id = si.product_id
+       WHERE s.status = 'completed'${profitConditions.length ? ` AND ${profitConditions.join(" AND ")}` : ""}`,
+    ).get(...values);
     return response.json({
       summary: {
         total_sales: sales.reduce((sum, sale) => sum + Number(sale.total_amount || 0), 0),
         transaction_count: sales.length,
         total_paid: sales.reduce((sum, sale) => sum + Number(sale.payment_amount || 0), 0),
         total_change: sales.reduce((sum, sale) => sum + Number(sale.change_amount || 0), 0),
+        gross_profit: Number(profit?.gross_profit || 0),
         products_tracked: inventory.length,
         inventory_units: inventory.reduce((sum, product) => sum + Number(product.quantity || 0), 0),
         low_stock_count: inventory.filter((product) => product.low_stock).length,
@@ -560,6 +591,12 @@ api.get("/users", requireAdmin, async (_request, response) =>
 );
 api.put("/profile", async (request, response, next) => {
   request.params.id = request.user.id;
+  // Only these fields may be changed from your own profile. Role and active
+  // status are admin-only, so a staff member cannot promote themselves.
+  const { name, email, password } = request.body || {};
+  request.body = Object.fromEntries(
+    Object.entries({ name, email, password }).filter(([, value]) => value !== undefined && value !== ""),
+  );
   return saveUser(request, response, next, true);
 });
 api.get("/users/:id", requireAdmin, async (request, response) => {
@@ -574,9 +611,13 @@ api.get("/users/:id", requireAdmin, async (request, response) => {
 api.post("/users", requireAdmin, async (request, response, next) =>
   saveUser(request, response, next, false),
 );
-api.put("/users/:id", requireAdmin, async (request, response, next) =>
-  saveUser(request, response, next, true),
-);
+api.put("/users/:id", requireAdmin, async (request, response, next) => {
+  // Stop an admin from locking themselves out of the system.
+  const isSelf = Number(request.params.id) === request.user.id;
+  if (isSelf && (request.body?.is_active === false || (request.body?.role && request.body.role !== "admin")))
+    return response.status(422).json({ message: "You cannot deactivate or demote your own account." });
+  return saveUser(request, response, next, true);
+});
 api.delete("/users/:id", requireAdmin, async (request, response) => {
   if (Number(request.params.id) === request.user.id)
     return response.status(422).json({ message: "You cannot delete your own account." });

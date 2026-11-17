@@ -126,3 +126,46 @@ test("admin and staff workflows are authenticated and role restricted", async ()
   });
   assert.equal(unsupportedPayment.status, 422);
 });
+
+test("users cannot escalate their own access or lock themselves out", async () => {
+  const login = (email) =>
+    request("/auth/login", { method: "POST", body: JSON.stringify({ email, password: "password123" }) });
+  const staff = await login("staff@motoparts.test");
+  const staffHeaders = { Authorization: `Bearer ${staff.body.token}` };
+
+  // A staff member sends role/is_active through their own profile: both are ignored.
+  const promote = await request("/profile", {
+    method: "PUT",
+    headers: staffHeaders,
+    body: JSON.stringify({ name: staff.body.user.name, role: "admin", is_active: false }),
+  });
+  assert.equal(promote.status, 200);
+  assert.equal(promote.body.data.role, "staff");
+  assert.equal(Boolean(promote.body.data.is_active), true);
+
+  // Staff cannot post announcements.
+  const announce = await request("/notifications", {
+    method: "POST",
+    headers: staffHeaders,
+    body: JSON.stringify({ title: "Hi", message: "Test" }),
+  });
+  assert.equal(announce.status, 403);
+
+  // An admin cannot deactivate or demote their own account.
+  const admin = await login("admin@motoparts.test");
+  const adminHeaders = { Authorization: `Bearer ${admin.body.token}` };
+  for (const body of [{ is_active: false }, { role: "staff" }]) {
+    const selfUpdate = await request(`/users/${admin.body.user.id}`, {
+      method: "PUT",
+      headers: adminHeaders,
+      body: JSON.stringify(body),
+    });
+    assert.equal(selfUpdate.status, 422);
+  }
+
+  // Dashboard and reports include the new fields.
+  const summary = await request("/dashboard/summary", { headers: adminHeaders });
+  assert.ok(Array.isArray(summary.body.data.top_products));
+  const overview = await request("/reports/overview", { headers: adminHeaders });
+  assert.equal(typeof overview.body.summary.gross_profit, "number");
+});

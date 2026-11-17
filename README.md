@@ -10,12 +10,16 @@ See [docs/PHASE-2-ARCHITECTURE.md](docs/PHASE-2-ARCHITECTURE.md) for the archite
 
 ## Run locally
 
-```powershell
-cd frontend
-npm run dev
-```
+### What you need
 
-The Node.js API can be started with:
+- [Node.js](https://nodejs.org/) (LTS)
+- [XAMPP](https://www.apachefriends.org/) (only its MySQL is used, so Apache can stay off)
+
+### 1. Start MySQL
+
+Open the **XAMPP Control Panel** and click **Start** next to **MySQL**. It must be running before the backend starts. If the backend fails with `ECONNREFUSED 127.0.0.1:3306`, MySQL is not running.
+
+### 2. Start the backend (first terminal)
 
 ```powershell
 cd backend
@@ -24,7 +28,33 @@ Copy-Item .env.example .env
 npm run dev
 ```
 
-The API creates the configured MySQL database tables and seed accounts on first start.
+The API runs at `http://127.0.0.1:8000`. On first start it creates the `BS Tarluck` database, its tables, and two login accounts. The `.env.example` defaults match a standard XAMPP install (user `root`, no password, port 3306). If your MySQL is set up differently, edit `backend/.env`.
+
+### 3. Start the frontend (second terminal)
+
+```powershell
+cd frontend
+npm install
+Copy-Item .env.example .env
+npm run dev
+```
+
+Open `http://localhost:5173` and sign in with one of these accounts:
+
+| Role  | Email                  | Password      |
+| ----- | ---------------------- | ------------- |
+| Admin | `admin@motoparts.test` | `password123` |
+| Staff | `staff@motoparts.test` | `password123` |
+
+You only need to copy `.env` once. Run `npm install` the first time and again after any pull that changes `package.json`. Otherwise, start MySQL and run `npm run dev` in each folder.
+
+### Optional: demo data
+
+For a presentation-ready database (12 parts with pictures and a week of sample sales), run once from `backend`:
+
+```powershell
+npm run seed:demo
+```
 
 Run the production checks from the repository root:
 

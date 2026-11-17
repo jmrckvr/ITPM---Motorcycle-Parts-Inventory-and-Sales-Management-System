@@ -165,6 +165,13 @@ export async function productView(product) {
     await db.prepare("SELECT * FROM categories WHERE id = ?").get(product.category_id),
   ) } : null;
 }
+// Sales and stock movements only need a product's name/SKU/price, not its picture.
+// Leaving image_data out keeps those lists small (pictures can be ~60 KB each).
+const productSummaryColumns = "id, category_id, sku, name, brand, barcode, cost_price, price, quantity, reorder_level, is_active";
+async function productSummary(id) {
+  const product = await db.prepare(`SELECT ${productSummaryColumns} FROM products WHERE id = ?`).get(id);
+  return product ? { ...product, is_active: Boolean(product.is_active) } : null;
+}
 export async function saleView(sale) {
   if (!sale) return null;
   const cashier = await db.prepare("SELECT id,name,email,role,created_at,updated_at FROM users WHERE id = ?").get(sale.cashier_id);
@@ -172,7 +179,7 @@ export async function saleView(sale) {
   return {
     ...sale, cashier: userView(cashier),
     items: await Promise.all(items.map(async (item) => ({
-      ...item, product: await productView(await db.prepare("SELECT * FROM products WHERE id = ?").get(item.product_id)),
+      ...item, product: await productSummary(item.product_id),
     }))),
   };
 }
@@ -180,7 +187,7 @@ export async function movementView(value) {
   if (!value) return null;
   return {
     ...value,
-    product: await productView(await db.prepare("SELECT * FROM products WHERE id = ?").get(value.product_id)),
+    product: await productSummary(value.product_id),
     supplier: supplierView(value.supplier_id ? await db.prepare("SELECT * FROM suppliers WHERE id = ?").get(value.supplier_id) : null),
     user: userView(await db.prepare("SELECT id,name,email,role,created_at,updated_at FROM users WHERE id = ?").get(value.user_id)),
   };
