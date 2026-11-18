@@ -2181,7 +2181,10 @@ button.data-row {
   .form-fields {
     align-content: start;
     gap: 14px;
-    padding-right: 4px;
+    /* 4px room on every side so the 3px focus glow isn't cut off by the
+       scroll box; the negative margin keeps fields lined up with the heading. */
+    margin: -4px;
+    padding: 4px;
   }
   .form-heading {
     margin-bottom: 0;

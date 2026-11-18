@@ -60,6 +60,8 @@ import {
   Warehouse,
   X,
 } from "@lucide/vue";
+import OptionPicker from "./components/OptionPicker.vue";
+import ProductPicker from "./components/ProductPicker.vue";
 import api from "./services/api";
 import bszLogo from "./assets/bsz-logo.png";
 
@@ -1875,25 +1877,15 @@ watch(catalogForm, (form) => form && focusFirstField(".catalog-modal"));
                     </div>
                   </div>
                   <label>Product*
-                    <select v-model="stockForm.product_id">
-                      <option value="">Select product…</option>
-                      <option v-for="product in products" :key="product.id" :value="product.id">{{ product.name }} ({{ product.quantity }} in stock)</option>
-                    </select>
+                    <ProductPicker v-model="stockForm.product_id" :products="products" />
                   </label>
                   <div class="form-row">
                     <label v-if="isStockIn">
                       <span class="label-row">Supplier*<button type="button" class="text-button" @click="router.push({ path: '/catalog', query: { tab: 'suppliers' } })">Manage</button></span>
-                      <select v-model="stockForm.supplier_id">
-                        <option value="">Select supplier…</option>
-                        <option v-for="supplier in activeSuppliers" :key="supplier.id" :value="supplier.id">{{ supplier.name }}</option>
-                      </select>
+                      <OptionPicker v-model="stockForm.supplier_id" placeholder="Select supplier…" :options="activeSuppliers.map((s) => ({ value: s.id, label: s.name }))" />
                     </label>
                     <label v-else>Adjustment type*
-                      <select v-model="adjustType">
-                        <option>Damage / Loss</option>
-                        <option>Stock correction</option>
-                        <option>Returned to supplier</option>
-                      </select>
+                      <OptionPicker v-model="adjustType" :options="['Damage / Loss', 'Stock correction', 'Returned to supplier']" />
                     </label>
                     <label>Quantity*<input v-model.number="stockForm.quantity" type="number" min="1" step="1" /></label>
                   </div>
